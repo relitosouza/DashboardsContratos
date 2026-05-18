@@ -1,35 +1,51 @@
+@import url('https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600;700&family=Fira+Sans:wght@300;400;500;600;700&display=swap');
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
 :root {
-  --background: #0f172a;
-  --foreground: #f8fafc;
-  --card: #1e293b;
-  --card-foreground: #f8fafc;
-  --primary: #3b82f6;
+  --background: #f8fafc;
+  --foreground: #020617;
+  --card: #ffffff;
+  --card-foreground: #020617;
+  --primary: #0f172a;
   --primary-foreground: #ffffff;
   --secondary: #334155;
   --secondary-foreground: #f8fafc;
-  --accent: #8b5cf6;
+  --accent: #0369a1;
   --accent-foreground: #ffffff;
   --destructive: #ef4444;
   --destructive-foreground: #f8fafc;
-  --border: #334155;
-  --input: #334155;
-  --ring: #3b82f6;
-  --radius: 0.75rem;
+  --border: #e2e8f0;
+  --input: #ffffff;
+  --ring: #0f172a;
+  --radius: 1rem;
 }
 
-body {
-  background-color: var(--background);
-  color: var(--foreground);
+@layer base {
+  body {
+    @apply bg-background text-foreground;
+    font-family: 'Fira Sans', sans-serif;
+  }
+  
+  h1, h2, h3, h4, h5, h6 {
+    font-family: 'Fira Code', monospace;
+  }
 }
 
 .glass-card {
-  background: rgba(30, 41, 59, 0.7);
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+  @apply bg-white/80 backdrop-blur-md border border-white/20 shadow-xl;
+}
+
+.custom-scrollbar::-webkit-scrollbar {
+  width: 6px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-track {
+  @apply bg-transparent;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  @apply bg-slate-200 rounded-full hover:bg-slate-300 transition-colors;
 }
