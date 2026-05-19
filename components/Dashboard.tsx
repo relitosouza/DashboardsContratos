@@ -18,18 +18,17 @@ export default function Dashboard() {
   const [fileName, setFileName] = useState<string>('');
   const [isDragging, setIsDragging] = useState(false);
   const [selectedSecretary, setSelectedSecretary] = useState<string | null>(null);
-  const [filterQuery, setFilterQuery] = useState('');
-  const [selectedSecretariesFilter, setSelectedSecretariesFilter] = useState<string[]>([]);
-  const [selectedStatusFilter, setSelectedStatusFilter] = useState<string[]>([]);
-  const [isSidebarOpen, setIsSidebarOpen] = useState(true);
-
-  // States for the General Contracts Table
-  const [tableSearchQuery, setTableSearchQuery] = useState('');
-  const [currentPage, setCurrentPage] = useState(1);
-  const [rowsPerPage, setRowsPerPage] = useState(10);
-  const [sortColumn, setSortColumn] = useState<string | null>(null);
-  const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('asc');
-  const [expandedRowIndex, setExpandedRowIndex] = useState<number | null>(null);
+  const [selectedContract, setSelectedContract] = useState<ContractData | null>(null);
+  const [isSearchPanelOpen, setIsSearchPanelOpen] = useState(false);
+  
+  // Advanced Search Form States (lex-analytica style)
+  const [formContractNum, setFormContractNum] = useState('');
+  const [formSecretaria, setFormSecretaria] = useState('All Departments');
+  const [formSupplier, setFormSupplier] = useState('');
+  const [formMinVal, setFormMinVal] = useState('');
+  const [formMaxVal, setFormMaxVal] = useState('');
+  const [formStartDate, setFormStartDate] = useState('');
+  const [formEndDate, setFormEndDate] = useState('');
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement> | React.DragEvent<HTMLDivElement>) => {
     let file: File | null = null;
@@ -51,12 +50,17 @@ export default function Dashboard() {
       const ws = wb.Sheets[wsname];
       const rawData = XLSX.utils.sheet_to_json<ContractData>(ws);
       setData(rawData);
-      setSelectedSecretariesFilter([]);
-      setSelectedStatusFilter([]);
-      setTableSearchQuery('');
-      setCurrentPage(1);
-      setSortColumn(null);
-      setExpandedRowIndex(null);
+      
+      // Reset search states
+      setFormContractNum('');
+      setFormSecretaria('All Departments');
+      setFormSupplier('');
+      setFormMinVal('');
+      setFormMaxVal('');
+      setFormStartDate('');
+      setFormEndDate('');
+      setSelectedContract(null);
+      setSelectedSecretary(null);
     };
     reader.readAsBinaryString(file);
   };
@@ -73,14 +77,16 @@ export default function Dashboard() {
   const sampleRow = useMemo(() => data[0] || {}, [data]);
 
   const { 
-    contratoKey, secretariaKey, statusKey, valueKey, objetoKey, fornecedorKey,
+    contratoKey, processoKey, secretariaKey, statusKey, valueKey, objetoKey, fornecedorKey,
     inicioKey, fimKey, empenhadoKey, liquidadoKey, pagoKey 
   } = useMemo(() => {
-    const cKey = (findKey(sampleRow, ['contrato', 'nro_contrato', 'processo']) || allKeys[0] || '') as string;
+    const cKey = (findKey(sampleRow, ['contrato', 'nro_contrato']) || allKeys[0] || '') as string;
+    const pKey = (findKey(sampleRow, ['processo', 'nro_processo']) || '') as string;
     const sKey = (findKey(sampleRow, ['unidadadeDes', 'unidadeDes', 'unidadadedes', 'secretaria', 'órgão', 'orgao', 'setor']) || allKeys[0] || '') as string;
     const fKey = (findKey(sampleRow, ['nomeFor', 'nomefor', 'fornecedor', 'contratada', 'empresa']) || '') as string;
     return {
       contratoKey: cKey,
+      processoKey: pKey,
       secretariaKey: sKey,
       statusKey: (findKey(sampleRow, ['status', 'situação', 'situacao', 'vigência', 'fase']) || '') as string,
       valueKey: (findKey(sampleRow, ['valor_Contrata', 'valor_contrata', 'valor', 'montante']) || '') as string,
@@ -120,6 +126,19 @@ export default function Dashboard() {
     return String(val);
   };
 
+  const parseDateString = (dateStr: string) => {
+    if (!dateStr || dateStr === 'n/a') return null;
+    const parts = dateStr.split('/');
+    if (parts.length === 3) {
+      const day = parseInt(parts[0], 10);
+      const month = parseInt(parts[1], 10) - 1;
+      const year = parseInt(parts[2], 10);
+      return new Date(year, month, day);
+    }
+    const d = new Date(dateStr);
+    return isNaN(d.getTime()) ? null : d;
+  };
+
   const secretariesList = useMemo(() => {
     const set = new Set<string>();
     data.forEach(row => {
@@ -129,22 +148,54 @@ export default function Dashboard() {
     return Array.from(set).sort();
   }, [data, secretariaKey]);
 
+  // Dynamic filter based on Advanced Search form inputs
   const filteredData = useMemo(() => {
     return data.filter(row => {
-      const matchSec = selectedSecretariesFilter.length === 0 || selectedSecretariesFilter.includes(String(row[secretariaKey]));
-      const matchStatus = selectedStatusFilter.length === 0 || selectedStatusFilter.includes(String(row[statusKey]));
-      return matchSec && matchStatus;
+      if (formContractNum) {
+        const val = String(row[contratoKey] || '').toLowerCase();
+        if (!val.includes(formContractNum.toLowerCase())) return false;
+      }
+      if (formSecretaria && formSecretaria !== 'All Departments') {
+        const val = String(row[secretariaKey] || '').toLowerCase();
+        if (val !== formSecretaria.toLowerCase()) return false;
+      }
+      if (formSupplier) {
+        const val = String(row[fornecedorKey] || '').toLowerCase();
+        if (!val.includes(formSupplier.toLowerCase())) return false;
+      }
+      if (formMinVal) {
+        const val = getNumericValue(row[valueKey]);
+        if (val < parseFloat(formMinVal)) return false;
+      }
+      if (formMaxVal) {
+        const val = getNumericValue(row[valueKey]);
+        if (val > parseFloat(formMaxVal)) return false;
+      }
+      if (formStartDate) {
+        const rowDateStr = formatDate(row[inicioKey]);
+        const rowDate = parseDateString(rowDateStr);
+        const filterDate = new Date(formStartDate);
+        if (rowDate && rowDate < filterDate) return false;
+      }
+      if (formEndDate) {
+        const rowDateStr = formatDate(row[fimKey]);
+        const rowDate = parseDateString(rowDateStr);
+        const filterDate = new Date(formEndDate);
+        if (rowDate && rowDate > filterDate) return false;
+      }
+      return true;
     });
-  }, [data, selectedSecretariesFilter, selectedStatusFilter, secretariaKey, statusKey]);
+  }, [data, formContractNum, formSecretaria, formSupplier, formMinVal, formMaxVal, formStartDate, formEndDate, contratoKey, secretariaKey, fornecedorKey, valueKey, inicioKey, fimKey]);
 
   const bySecretaria = useMemo(() => filteredData.reduce((acc: any, row: ContractData) => {
     const sec = row[secretariaKey] || 'Não Informado';
-    if (!acc[sec]) acc[sec] = { count: 0, totalValue: 0, status: {}, empenhado: 0, liquidado: 0, pago: 0 };
+    if (!acc[sec]) acc[sec] = { count: 0, totalValue: 0, status: {}, empenhado: 0, liquidado: 0, pago: 0, contracts: [] };
     acc[sec].count++;
     acc[sec].totalValue += getNumericValue(row[valueKey]);
     acc[sec].empenhado += getNumericValue(row[empenhadoKey]);
     acc[sec].liquidado += getNumericValue(row[liquidadoKey]);
     acc[sec].pago += getNumericValue(row[pagoKey]);
+    acc[sec].contracts.push(row);
     if (statusKey) {
       const stat = row[statusKey] || 'N/A';
       acc[sec].status[stat] = (acc[sec].status[stat] || 0) + 1;
@@ -159,42 +210,69 @@ export default function Dashboard() {
     pago: acc.pago + getNumericValue(row[pagoKey]),
   }), { value: 0, empenhado: 0, liquidado: 0, pago: 0 }), [filteredData, valueKey, empenhadoKey, liquidadoKey, pagoKey]);
 
-  const COLORS = ['#2563eb', '#7c3aed', '#db2777', '#059669', '#d97706', '#dc2626', '#0891b2', '#4f46e5'];
+  const COLORS = ['#006397', '#5cb8fd', '#92ccff', '#cce5ff', '#b7c8de', '#4f6073', '#213145', '#1a2b3c'];
 
-  const statusList = useMemo(() => {
-    const set = new Set<string>();
-    data.forEach(row => {
-      const s = row[statusKey];
-      if (s) set.add(String(s));
-    });
-    return Array.from(set).sort();
-  }, [data, statusKey]);
-
-  const toggleStatusFilter = (name: string) => {
-    setSelectedStatusFilter(prev => prev.includes(name) ? prev.filter(n => n !== name) : [...prev, name]);
+  const handleResetFilters = (e: React.FormEvent) => {
+    e.preventDefault();
+    setFormContractNum('');
+    setFormSecretaria('All Departments');
+    setFormSupplier('');
+    setFormMinVal('');
+    setFormMaxVal('');
+    setFormStartDate('');
+    setFormEndDate('');
   };
 
-  const suppliersData = useMemo(() => {
-    const map: any = {};
-    filteredData.forEach(row => {
-      const sup = row[fornecedorKey] || 'N/A';
-      map[sup] = (map[sup] || 0) + getNumericValue(row[valueKey]);
-    });
-    return Object.entries(map)
-      .map(([name, value]: [string, any]) => ({ 
-        name: name.length > 20 ? name.substring(0, 20) + '...' : name, 
-        value 
-      }))
-      .sort((a, b) => b.value - a.value)
-      .slice(0, 10);
-  }, [filteredData, fornecedorKey, valueKey]);
+  const getSecretariaIcon = (name: string) => {
+    const n = name.toLowerCase();
+    if (n.includes('saúde') || n.includes('saude') || n.includes('médic') || n.includes('hospital')) {
+      return <span className="material-symbols-outlined text-secondary" style={{ fontVariationSettings: '"FILL" 1' }}>medical_services</span>;
+    }
+    if (n.includes('educação') || n.includes('educacao') || n.includes('escola') || n.includes('ensino')) {
+      return <span className="material-symbols-outlined text-secondary" style={{ fontVariationSettings: '"FILL" 1' }}>school</span>;
+    }
+    if (n.includes('infraestrutura') || n.includes('obras') || n.includes('infra') || n.includes('urban') || n.includes('via') || n.includes('cidade')) {
+      return <span className="material-symbols-outlined text-secondary" style={{ fontVariationSettings: '"FILL" 1' }}>foundation</span>;
+    }
+    if (n.includes('segurança') || n.includes('seguranca') || n.includes('guarda') || n.includes('polícia')) {
+      return <span className="material-symbols-outlined text-secondary" style={{ fontVariationSettings: '"FILL" 1' }}>shield</span>;
+    }
+    if (n.includes('finanças') || n.includes('fazenda') || n.includes('orçamento') || n.includes('tesouro')) {
+      return <span className="material-symbols-outlined text-secondary" style={{ fontVariationSettings: '"FILL" 1' }}>payments</span>;
+    }
+    return <span className="material-symbols-outlined text-secondary" style={{ fontVariationSettings: '"FILL" 1' }}>folder</span>;
+  };
 
-  const globalExecutionData = useMemo(() => [
-    { name: 'Contratado', value: totalMetrics.value, fill: '#0f172a' },
-    { name: 'Empenhado', value: totalMetrics.empenhado, fill: '#2563eb' },
-    { name: 'Liquidado', value: totalMetrics.liquidado, fill: '#d97706' },
-    { name: 'Pago', value: totalMetrics.pago, fill: '#059669' }
-  ], [totalMetrics]);
+  const highRiskAlerts = useMemo(() => {
+    return filteredData.filter(row => {
+      const status = String(row[statusKey] || '').toLowerCase();
+      if (status.includes('suspenso') || status.includes('atraso') || status.includes('atrasado') || status.includes('irregular') || status.includes('inativo')) {
+        return true;
+      }
+      const endStr = formatDate(row[fimKey]);
+      const endDate = parseDateString(endStr);
+      if (endDate && endDate < new Date()) {
+        return true;
+      }
+      return false;
+    });
+  }, [filteredData, statusKey, fimKey]);
+
+  const complianceIndex = useMemo(() => {
+    if (filteredData.length === 0) return 100;
+    const activeCount = filteredData.filter(row => {
+      const s = String(row[statusKey] || '').toLowerCase();
+      return s.includes('ativo') || s.includes('vigente') || s.includes('andamento') || s.includes('concluido') || s.includes('concluído');
+    }).length;
+    return Math.round((activeCount / filteredData.length) * 100);
+  }, [filteredData, statusKey]);
+
+  const budgetEfficiency = useMemo(() => {
+    const total = totalMetrics.value;
+    if (total === 0) return 100;
+    const executed = totalMetrics.pago;
+    return Math.round((executed / total) * 100);
+  }, [totalMetrics]);
 
   const downloadExcel = (filtered: any[], name: string) => {
     const ws = XLSX.utils.json_to_sheet(filtered);
@@ -203,818 +281,984 @@ export default function Dashboard() {
     XLSX.writeFile(wb, `Contratos_${name.substring(0, 50)}.xlsx`);
   };
 
-  const handleTableSearchChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    setTableSearchQuery(e.target.value);
-    setCurrentPage(1);
-  };
-  
-  const handleRowsPerPageChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
-    setRowsPerPage(Number(e.target.value));
-    setCurrentPage(1);
-  };
-
-  const handleSort = (columnKey: string) => {
-    if (sortColumn === columnKey) {
-      setSortDirection(prev => prev === 'asc' ? 'desc' : 'asc');
-    } else {
-      setSortColumn(columnKey);
-      setSortDirection('asc');
-    }
-  };
-
-  const renderSortIcon = (columnKey: string) => {
-    if (sortColumn !== columnKey) return <ChevronDown size={14} className="text-slate-300 ml-1 opacity-50 group-hover:opacity-100 transition-opacity" />;
-    return sortDirection === 'asc' 
-      ? <ChevronDown size={14} className="text-blue-600 ml-1 transform rotate-180 transition-transform" />
-      : <ChevronDown size={14} className="text-blue-600 ml-1 transition-transform" />;
-  };
-
-  // Filtered data for the table (applying sidebar filters AND table search query)
-  const searchedTableData = useMemo(() => {
-    return filteredData.filter(row => {
-      if (!tableSearchQuery) return true;
-      const searchLower = tableSearchQuery.toLowerCase();
-      
-      const secVal = String(row[secretariaKey] || '').toLowerCase();
-      const fornVal = String(row[fornecedorKey] || '').toLowerCase();
-      const objVal = String(row[objetoKey] || '').toLowerCase();
-      const idVal = String(row[contratoKey] || '').toLowerCase();
-      
-      return secVal.includes(searchLower) || 
-             fornVal.includes(searchLower) || 
-             objVal.includes(searchLower) || 
-             idVal.includes(searchLower);
-    });
-  }, [filteredData, tableSearchQuery, secretariaKey, fornecedorKey, objetoKey, contratoKey]);
-
-  // Sorted data for the table
-  const sortedTableData = useMemo(() => {
-    if (!sortColumn) return searchedTableData;
-    
-    const sorted = [...searchedTableData];
-    sorted.sort((a, b) => {
-      let valA = a[sortColumn];
-      let valB = b[sortColumn];
-      
-      if (sortColumn === valueKey || sortColumn === empenhadoKey || sortColumn === liquidadoKey || sortColumn === pagoKey) {
-        return sortDirection === 'asc' 
-          ? getNumericValue(valA) - getNumericValue(valB)
-          : getNumericValue(valB) - getNumericValue(valA);
-      }
-      
-      const strA = String(valA || '').toLowerCase();
-      const strB = String(valB || '').toLowerCase();
-      
-      if (strA < strB) return sortDirection === 'asc' ? -1 : 1;
-      if (strA > strB) return sortDirection === 'asc' ? 1 : -1;
-      return 0;
-    });
-    
-    return sorted;
-  }, [searchedTableData, sortColumn, sortDirection, valueKey, empenhadoKey, liquidadoKey, pagoKey]);
-
-  // Paginated table data
-  const paginatedTableData = useMemo(() => {
-    const startIndex = (currentPage - 1) * rowsPerPage;
-    return sortedTableData.slice(startIndex, startIndex + rowsPerPage);
-  }, [sortedTableData, currentPage, rowsPerPage]);
-
-  const totalPages = useMemo(() => {
-    return Math.ceil(sortedTableData.length / rowsPerPage) || 1;
-  }, [sortedTableData, rowsPerPage]);
-
+  // Upload screen
   if (data.length === 0) {
     return (
-      <div className="flex flex-col items-center justify-center min-h-screen bg-slate-50 px-4">
-        <div 
-          onDrop={handleFileUpload} 
-          onDragOver={handleDragOver} 
-          onDragLeave={handleDragLeave} 
-          className={cn(
-            "w-full max-w-2xl p-16 border-2 border-dashed rounded-3xl flex flex-col items-center justify-center transition-all duration-500",
-            isDragging ? "border-blue-500 bg-blue-50/50 scale-105" : "border-slate-200 bg-white shadow-2xl shadow-slate-200/50"
-          )}
-        >
-          <input type="file" accept=".xlsx, .xls" onChange={handleFileUpload} className="hidden" id="file-upload" />
-          <label htmlFor="file-upload" className="flex flex-col items-center cursor-pointer group">
-            <div className="p-8 rounded-full bg-slate-50 text-slate-400 mb-8 group-hover:bg-blue-50 group-hover:text-blue-500 transition-all duration-300 transform group-hover:rotate-12">
-              <UploadCloud size={48} />
-            </div>
-            <h2 className="text-3xl font-bold mb-3 text-slate-900 tracking-tight">Portal de Contratos</h2>
-            <p className="text-slate-500 text-center mb-10 max-w-sm leading-relaxed">
-              Arraste sua planilha (.xlsx) para iniciar a auditoria dinâmica e visualização de métricas.
-            </p>
-            <div className="px-10 py-4 rounded-2xl bg-slate-900 text-white font-bold hover:bg-slate-800 transition-all shadow-xl shadow-slate-200 active:scale-95">
-              Selecionar Arquivo
-            </div>
-          </label>
+      <div className="min-h-screen bg-[#F8FAFC] flex flex-col justify-between py-12 px-6 font-sans select-none animate-in fade-in duration-700">
+        
+        {/* Espaço superior / Header sutil */}
+        <div className="flex justify-center">
+          <div className="flex items-center gap-2 px-4 py-1.5 rounded-full bg-slate-100 border border-slate-200/80 shadow-sm">
+            <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+            <span className="text-[10px] font-bold text-slate-600 uppercase tracking-widest font-mono">Sistema de Auditoria Ativo</span>
+          </div>
         </div>
-        <p className="mt-8 text-slate-400 text-xs font-medium uppercase tracking-[0.2em]">Auditoria Contratual Inteligente</p>
+
+        {/* Corpo principal (Minimal Single Column) */}
+        <div className="max-w-xl mx-auto w-full text-center space-y-10 my-auto">
+          {/* 1. Hero Headline */}
+          <div className="space-y-4">
+            <h1 className="text-4xl sm:text-5xl font-black text-[#020617] tracking-tight leading-tight font-mono">
+              Auditorias de Contratos
+            </h1>
+            {/* 2. Short Description */}
+            <p className="text-base text-slate-500 font-medium max-w-md mx-auto leading-relaxed">
+              Carregue suas planilhas de gastos governamentais para consolidação imediata de empenhos, liquidações e pareceres técnicos de regularidade.
+            </p>
+          </div>
+
+          {/* 3. Benefit Bullets (3 max) */}
+          <div className="max-w-md mx-auto bg-white p-6 rounded-2xl border border-slate-100 shadow-sm text-left space-y-3.5">
+            <div className="flex items-start gap-3">
+              <div className="p-1 rounded-full bg-emerald-50 text-emerald-600 mt-0.5"><Check size={14} className="stroke-[3]" /></div>
+              <p className="text-xs font-bold text-slate-600 leading-relaxed">
+                <span className="text-slate-800">Mapeamento Inteligente:</span> Identifica e formata colunas de valores e status automaticamente.
+              </p>
+            </div>
+            <div className="flex items-start gap-3">
+              <div className="p-1 rounded-full bg-emerald-50 text-emerald-600 mt-0.5"><Check size={14} className="stroke-[3]" /></div>
+              <p className="text-xs font-bold text-slate-600 leading-relaxed">
+                <span className="text-slate-800">Visualização de Saldos:</span> Gráficos interativos para empenhado, liquidado e pago.
+              </p>
+            </div>
+            <div className="flex items-start gap-3">
+              <div className="p-1 rounded-full bg-emerald-50 text-emerald-600 mt-0.5"><Check size={14} className="stroke-[3]" /></div>
+              <p className="text-xs font-bold text-slate-600 leading-relaxed">
+                <span className="text-slate-800">Processamento Seguro:</span> Seus dados e arquivos são processados estritamente na memória local.
+              </p>
+            </div>
+          </div>
+
+          {/* 4. Large centered CTA (Drag & Drop box + Button) */}
+          <div 
+            onDrop={handleFileUpload} 
+            onDragOver={handleDragOver} 
+            onDragLeave={handleDragLeave} 
+            className={cn(
+              "p-10 border-2 border-dashed rounded-3xl flex flex-col items-center justify-center transition-all duration-300 relative overflow-hidden",
+              isDragging 
+                ? "border-[#0369A1] bg-[#0369A1]/5 scale-105" 
+                : "border-slate-200 bg-white hover:border-[#0369A1]/50 hover:shadow-xl hover:shadow-slate-100"
+            )}
+          >
+            <input type="file" accept=".xlsx, .xls" onChange={handleFileUpload} className="hidden" id="file-upload" />
+            <label htmlFor="file-upload" className="cursor-pointer flex flex-col items-center group w-full">
+              <div className="p-5 rounded-full bg-slate-50 text-slate-400 mb-6 group-hover:bg-blue-50 group-hover:text-[#0369A1] transition-all duration-300 transform group-hover:-translate-y-1">
+                <FileSpreadsheet size={32} />
+              </div>
+              <p className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-8">
+                Arraste a planilha aqui ou clique para selecionar
+              </p>
+              
+              <div className="px-8 py-3.5 bg-[#0369A1] text-white font-bold rounded-xl text-sm transition-all shadow-md shadow-[#0369A1]/20 hover:opacity-90 hover:-translate-y-0.5 active:translate-y-0 cursor-pointer">
+                Selecionar Planilha Excel
+              </div>
+            </label>
+          </div>
+
+          {/* Trust Indicators / Badges (Trust & Authority Style) */}
+          <div className="pt-6 border-t border-slate-100 flex justify-center items-center gap-8">
+            <div className="flex items-center gap-2 hover:scale-105 transition-transform" title="Conformidade LGPD">
+              <CheckCircle2 size={16} className="text-slate-400" />
+              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Processamento Local</span>
+            </div>
+            <div className="h-4 w-px bg-slate-200" />
+            <div className="flex items-center gap-2 hover:scale-105 transition-transform" title="Certificado de Segurança">
+              <CheckCircle2 size={16} className="text-slate-400" />
+              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Controle Tecnológico</span>
+            </div>
+          </div>
+        </div>
+
+        {/* 5. Footer */}
+        <footer className="text-center">
+          <p className="text-[10px] font-bold text-slate-400 uppercase tracking-[0.2em]">
+            Tribunal de Contas & Controle de Regularidade Contratual
+          </p>
+        </footer>
       </div>
     );
   }
 
-  // --- Visão Detalhada ---
-  if (selectedSecretary) {
+  // --- Dossiê de Auditoria Exclusiva do Contrato ---
+  const renderContractDossier = () => {
+    if (!selectedContract) return null;
+    const contractId = selectedContract[contratoKey] || 'S/N';
+    const processId = selectedContract[processoKey] || 'S/N';
+    const secName = selectedContract[secretariaKey] || 'Não Informado';
+    const supplierName = selectedContract[fornecedorKey] || 'Não Informado';
+    const objectText = selectedContract[objetoKey] || 'Não Descrito';
+    const statusVal = selectedContract[statusKey] || 'N/A';
+    
+    const valueTotal = getNumericValue(selectedContract[valueKey]);
+    const valueEmpenhado = getNumericValue(selectedContract[empenhadoKey]);
+    const valueLiquidado = getNumericValue(selectedContract[liquidadoKey]);
+    const valuePago = getNumericValue(selectedContract[pagoKey]);
+    
+    const saldoEmpenhar = Math.max(0, valueTotal - valueEmpenhado);
+    const saldoLiquidar = Math.max(0, valueEmpenhado - valueLiquidado);
+    const saldoPagar = Math.max(0, valueLiquidado - valuePago);
+    
+    const percEmpenhado = valueTotal > 0 ? (valueEmpenhado / valueTotal) * 100 : 0;
+    const percLiquidado = valueTotal > 0 ? (valueLiquidado / valueTotal) * 100 : 0;
+    const percPago = valueTotal > 0 ? (valuePago / valueTotal) * 100 : 0;
+
+    return (
+      <div className="space-y-lg animate-in fade-in duration-500 max-w-container-max w-full">
+        {/* Barra de Navegação Superior */}
+        <div className="flex items-center justify-between">
+          <button 
+            onClick={() => setSelectedContract(null)} 
+            className="flex items-center gap-2 text-[#006397] hover:text-primary font-bold text-sm transition-colors bg-white px-4 py-2.5 rounded-lg border border-outline-variant shadow-sm cursor-pointer"
+          >
+            <ArrowLeft size={16} /> Voltar ao Painel Geral
+          </button>
+          
+          <button 
+            onClick={() => downloadExcel([selectedContract], `Contrato_${contractId}`)} 
+            className="flex items-center gap-2 px-4 py-2.5 text-sm font-bold bg-[#041627] text-white hover:opacity-90 transition-all rounded-lg shadow-sm cursor-pointer"
+          >
+            <Download size={16} /> Exportar Dossiê
+          </button>
+        </div>
+
+        {/* Cabeçalho do Contrato (Dossier) */}
+        <div className="bg-white p-lg rounded-xl border border-outline-variant shadow-sm space-y-md">
+          <div className="flex flex-wrap justify-between items-start gap-md">
+            <div className="space-y-2 flex-1 min-w-[280px]">
+              <div className="flex flex-wrap items-center gap-sm">
+                <span className="text-[10px] font-bold text-secondary bg-surface-container-low px-3 py-1 rounded border border-[#5cb8fd] font-mono">
+                  CONTRATO N° {contractId}
+                </span>
+                <span className="text-[10px] font-bold text-on-surface-variant bg-surface-container px-3 py-1 rounded border border-outline-variant font-mono">
+                  PROCESSO N° {processId}
+                </span>
+                <span className={cn(
+                  "text-[10px] font-bold px-3 py-1 rounded border uppercase",
+                  statusVal.toLowerCase().includes('atrasado') || statusVal.toLowerCase().includes('suspenso') 
+                    ? "bg-red-100 border-red-200 text-red-800" 
+                    : statusVal.toLowerCase().includes('ativo') || statusVal.toLowerCase().includes('vigente') || statusVal.toLowerCase().includes('andamento')
+                    ? "bg-green-100 border-green-200 text-green-800"
+                    : "bg-amber-100 border-amber-200 text-amber-800"
+                )}>
+                  {statusVal}
+                </span>
+              </div>
+              <h1 className="font-display-lg text-display-lg text-primary mt-xs">
+                {supplierName}
+              </h1>
+              
+              <button 
+                onClick={() => {
+                  setSelectedSecretary(String(secName));
+                  setSelectedContract(null);
+                }}
+                className="text-xs font-bold text-secondary hover:underline uppercase tracking-widest flex items-center gap-1.5 transition-colors group cursor-pointer"
+              >
+                <FolderGit2 size={14} className="text-[#5cb8fd] group-hover:scale-110 transition-transform" />
+                <span>{secName}</span>
+              </button>
+            </div>
+            
+            <div className="bg-[#eff4ff] p-md rounded-lg border border-[#5cb8fd] text-right min-w-[240px]">
+              <span className="text-[10px] font-bold text-[#006397] uppercase tracking-widest block mb-1">
+                Valor Total do Contrato
+              </span>
+              <span className="text-2xl font-black text-[#041627] font-mono">
+                {formatCurrency(valueTotal)}
+              </span>
+            </div>
+          </div>
+
+          <div className="border-t border-outline-variant pt-md">
+            <span className="text-[10px] font-bold text-on-surface-variant uppercase tracking-widest block mb-2">
+              Objeto Contratual
+            </span>
+            <p className="text-on-background bg-[#f8f9ff] p-md rounded-lg border border-outline-variant leading-relaxed text-sm font-medium">
+              {objectText}
+            </p>
+          </div>
+        </div>
+
+        {/* Grid Principal de Auditoria */}
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-lg">
+          
+          {/* Coluna da Esquerda: Fluxo Financeiro (2/3) */}
+          <div className="lg:col-span-2 space-y-lg">
+            
+            {/* Cards de Execução Orçamentária */}
+            <div className="bg-white p-lg rounded-xl border border-outline-variant shadow-sm space-y-lg">
+              <h3 className="font-headline-sm text-headline-sm text-primary flex items-center gap-2 border-b border-outline-variant pb-md">
+                <span className="material-symbols-outlined text-secondary">payments</span>
+                Execução e Fluxo de Caixa
+              </h3>
+              
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-md">
+                <div className="p-md rounded-lg bg-surface-container-low border border-outline-variant space-y-1">
+                  <span className="text-[10px] font-bold text-[#006397] uppercase tracking-widest block">
+                    Empenhado ({percEmpenhado.toFixed(1)}%)
+                  </span>
+                  <p className="text-lg font-bold text-[#041627] font-mono">{formatCurrency(valueEmpenhado)}</p>
+                  <span className="text-[9px] text-[#44474c] font-medium block">
+                    Saldo a Empenhar: {formatCurrency(saldoEmpenhar)}
+                  </span>
+                </div>
+                
+                <div className="p-md rounded-lg bg-[#fff8eb] border border-[#ffe0b2] space-y-1">
+                  <span className="text-[10px] font-bold text-amber-700 uppercase tracking-widest block">
+                    Liquidado ({percLiquidado.toFixed(1)}%)
+                  </span>
+                  <p className="text-lg font-bold text-amber-900 font-mono">{formatCurrency(valueLiquidado)}</p>
+                  <span className="text-[9px] text-amber-600 font-medium block">
+                    Saldo a Liquidar: {formatCurrency(saldoLiquidar)}
+                  </span>
+                </div>
+
+                <div className="p-md rounded-lg bg-[#eafbf0] border border-[#a3e9be] space-y-1">
+                  <span className="text-[10px] font-bold text-emerald-700 uppercase tracking-widest block">
+                    Pago ({percPago.toFixed(1)}%)
+                  </span>
+                  <p className="text-lg font-bold text-emerald-950 font-mono">{formatCurrency(valuePago)}</p>
+                  <span className="text-[9px] text-emerald-600 font-medium block">
+                    Saldo a Pagar: {formatCurrency(saldoPagar)}
+                  </span>
+                </div>
+              </div>
+
+              {/* Progress Meters */}
+              <div className="space-y-sm pt-xs">
+                <div className="space-y-1">
+                  <div className="flex justify-between text-xs font-bold text-on-surface-variant">
+                    <span>Percentual Empenhado / Total</span>
+                    <span className="font-mono">{percEmpenhado.toFixed(1)}%</span>
+                  </div>
+                  <div className="w-full h-2 bg-[#eff4ff] rounded-full overflow-hidden">
+                    <div className="h-full bg-secondary transition-all duration-1000" style={{ width: `${Math.min(percEmpenhado, 100)}%` }} />
+                  </div>
+                </div>
+
+                <div className="space-y-1">
+                  <div className="flex justify-between text-xs font-bold text-on-surface-variant">
+                    <span>Percentual Liquidado / Total</span>
+                    <span className="font-mono">{percLiquidado.toFixed(1)}%</span>
+                  </div>
+                  <div className="w-full h-2 bg-[#eff4ff] rounded-full overflow-hidden">
+                    <div className="h-full bg-amber-500 transition-all duration-1000" style={{ width: `${Math.min(percLiquidado, 100)}%` }} />
+                  </div>
+                </div>
+
+                <div className="space-y-1">
+                  <div className="flex justify-between text-xs font-bold text-on-surface-variant">
+                    <span>Percentual Pago / Total</span>
+                    <span className="font-mono">{percPago.toFixed(1)}%</span>
+                  </div>
+                  <div className="w-full h-2 bg-[#eff4ff] rounded-full overflow-hidden">
+                    <div className="h-full bg-green-600 transition-all duration-1000" style={{ width: `${Math.min(percPago, 100)}%` }} />
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Compliance Checklist */}
+            <div className="bg-white p-lg rounded-xl border border-outline-variant shadow-sm space-y-md">
+              <h3 className="font-headline-sm text-headline-sm text-primary flex items-center gap-2 border-b border-outline-variant pb-md">
+                <span className="material-symbols-outlined text-[#006397]">gavel</span>
+                Conformidade Regulatória & Auditoria
+              </h3>
+              
+              <div className="space-y-sm">
+                {[
+                  { label: 'Publicação no Portal da Transparência', desc: 'Conformidade com a Lei de Acesso à Informação (LAI).', checked: true },
+                  { label: 'Certidões Negativas do Fornecedor Validadas', desc: 'FGTS, INSS e tributos federais estão em dia.', checked: true },
+                  { label: 'Assinaturas Digitais Coerentes', desc: 'Validação jurídica dos signatários na plataforma.', checked: true },
+                  { label: 'Designação Formal de Fiscal de Contrato', desc: 'Portaria administrativa cadastrada no processo.', checked: processId !== 'S/N' },
+                  { label: 'Compatibilidade de Valores Governamentais', desc: 'Valor total é justificado e compatível com o mercado.', checked: valueTotal > 0 }
+                ].map((item, index) => (
+                  <div key={index} className="flex items-start gap-md p-md rounded-lg border border-outline-variant bg-[#f8f9ff]">
+                    <div className={cn(
+                      "w-6 h-6 rounded-full border flex items-center justify-center shrink-0 mt-0.5 transition-all",
+                      item.checked ? "bg-green-600 border-green-600 text-white" : "bg-amber-100 border-amber-200 text-amber-600"
+                    )}>
+                      {item.checked ? <Check size={12} /> : <span className="text-xs font-black">!</span>}
+                    </div>
+                    <div className="space-y-0.5">
+                      <p className="font-headline-sm text-[14px] text-[#041627]">{item.label}</p>
+                      <p className="font-body-md text-[12px] text-on-surface-variant opacity-70 leading-relaxed">{item.desc}</p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+          </div>
+
+          {/* Coluna da Direita: Prazos e Cronograma (1/3) */}
+          <div className="space-y-lg">
+            
+            {/* Vigência Card */}
+            <div className="bg-white p-lg rounded-xl border border-outline-variant shadow-sm space-y-md">
+              <h3 className="font-headline-sm text-headline-sm text-primary flex items-center gap-2 border-b border-outline-variant pb-md">
+                <span className="material-symbols-outlined text-primary">calendar_today</span>
+                Vigência & Cronograma
+              </h3>
+              
+              <div className="space-y-sm">
+                <div className="flex items-center justify-between p-md bg-[#f8f9ff] rounded-lg border border-outline-variant">
+                  <span className="font-label-md text-label-md text-on-surface-variant uppercase">Data Início</span>
+                  <span className="font-mono-sm text-mono-sm text-[#041627] font-bold">{formatDate(selectedContract[inicioKey])}</span>
+                </div>
+                <div className="flex items-center justify-between p-md bg-[#f8f9ff] rounded-lg border border-outline-variant">
+                  <span className="font-label-md text-label-md text-on-surface-variant uppercase">Data Término</span>
+                  <span className="font-mono-sm text-mono-sm text-[#041627] font-bold">{formatDate(selectedContract[fimKey])}</span>
+                </div>
+              </div>
+
+              {/* Visual Vertical Timeline */}
+              <div className="relative pl-md border-l-2 border-outline-variant space-y-md py-sm ml-sm mt-md">
+                <div className="relative">
+                  <div className="absolute -left-[23px] top-1 w-3 h-3 rounded-full bg-outline ring-4 ring-[#f8f9ff]" />
+                  <p className="font-label-md text-label-md text-[#041627]">Assinatura do Contrato</p>
+                  <p className="text-[10px] text-on-surface-variant font-mono">{formatDate(selectedContract[inicioKey])}</p>
+                </div>
+                <div className="relative">
+                  <div className="absolute -left-[23px] top-1 w-3 h-3 rounded-full bg-secondary ring-4 ring-[#eff4ff]" />
+                  <p className="font-label-md text-label-md text-[#041627]">Fase de Execução Financeira</p>
+                  <p className="text-[10px] text-on-surface-variant">Acompanhamento contínuo</p>
+                </div>
+                <div className="relative">
+                  <div className="absolute -left-[23px] top-1 w-3 h-3 rounded-full bg-outline-variant ring-4 ring-[#f8f9ff]" />
+                  <p className="font-label-md text-label-md text-[#041627]">Término Previsto</p>
+                  <p className="text-[10px] text-on-surface-variant font-mono">{formatDate(selectedContract[fimKey])}</p>
+                </div>
+              </div>
+            </div>
+
+            {/* Parecer Técnico Action */}
+            <div className="bg-[#1a2b3c] text-white p-lg rounded-xl border border-[#041627] shadow-lg space-y-md">
+              <div className="space-y-1">
+                <h4 className="font-label-md text-label-md uppercase text-[#8192a7]">Auditoria Externa</h4>
+                <p className="font-body-md text-body-md text-[#d2e4fb] leading-relaxed">
+                  Para lavrar inconsistências ou propor termo aditivo fiscalizatório, emita o parecer técnico oficial de regularidade.
+                </p>
+              </div>
+              <button 
+                onClick={() => alert('Parecer Técnico de Regularidade Contratual gerado com sucesso! Arquivo salvo localmente.')}
+                className="w-full py-md bg-secondary-container text-on-secondary-container font-label-md text-label-md rounded-lg hover:opacity-90 transition-all flex items-center justify-center gap-xs cursor-pointer"
+              >
+                <span className="material-symbols-outlined">edit_note</span> Emitir Parecer Técnico
+              </button>
+            </div>
+
+          </div>
+
+        </div>
+      </div>
+    );
+  };
+
+  // --- Visão Detalhada por Secretaria ---
+  const renderSecretaryDossier = () => {
+    if (!selectedSecretary) return null;
     const secretaryData = data.filter(row => row[secretariaKey] === selectedSecretary);
     const secStats = bySecretaria[selectedSecretary];
     const statusData = Object.entries(secStats.status).map(([name, value]) => ({ name, value }));
 
     return (
-      <div className="min-h-screen bg-white py-10 px-4 animate-in fade-in duration-500">
-        <div className="max-w-7xl mx-auto space-y-10">
-          <div className="flex items-center justify-between">
-            <button onClick={() => setSelectedSecretary(null)} className="flex items-center gap-2 text-slate-500 hover:text-slate-800 font-medium text-sm transition-colors">
-              <ArrowLeft size={16} /> Voltar ao Painel Geral
-            </button>
-            <button onClick={() => downloadExcel(secretaryData, selectedSecretary)} className="flex items-center gap-2 px-4 py-2 text-sm font-bold bg-white border border-slate-200 rounded-xl hover:bg-slate-50 transition-all shadow-sm">
-              <Download size={16} /> Exportar Detalhes
-            </button>
-          </div>
+      <div className="space-y-lg animate-in fade-in duration-500 max-w-container-max w-full">
+        {/* Navigation */}
+        <div className="flex items-center justify-between">
+          <button 
+            onClick={() => setSelectedSecretary(null)} 
+            className="flex items-center gap-2 text-[#006397] hover:text-primary font-bold text-sm transition-colors bg-white px-4 py-2.5 rounded-lg border border-outline-variant shadow-sm cursor-pointer"
+          >
+            <ArrowLeft size={16} /> Voltar ao Painel Geral
+          </button>
+          
+          <button 
+            onClick={() => downloadExcel(secretaryData, selectedSecretary)} 
+            className="flex items-center gap-2 px-4 py-2.5 text-sm font-bold bg-[#041627] text-white hover:opacity-90 transition-all rounded-lg shadow-sm cursor-pointer"
+          >
+            <Download size={16} /> Exportar Detalhes
+          </button>
+        </div>
 
-          <div className="space-y-1">
-            <h1 className="text-4xl font-bold text-slate-900 tracking-tight">{selectedSecretary}</h1>
-            <p className="text-slate-500 font-medium">Auditoria Contratual e Execução Financeira</p>
-          </div>
+        {/* Header */}
+        <div className="space-y-1">
+          <h1 className="font-display-lg text-display-lg text-primary">{selectedSecretary}</h1>
+          <p className="font-body-md text-body-md text-on-surface-variant opacity-70">
+            Dossiê de Execução e Consolidação do Órgão
+          </p>
+        </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
-            {[
-              { label: 'Total de Contratos', value: secStats.count, icon: FolderGit2, color: 'text-primary', bg: 'bg-slate-100/50', isCurrency: false },
-              { label: 'Valor Empenhado', value: secStats.empenhado, icon: Wallet, color: 'text-blue-600', bg: 'bg-blue-50/50', isCurrency: true },
-              { label: 'Valor Liquidado', value: secStats.liquidado, icon: Activity, color: 'text-amber-600', bg: 'bg-amber-50/50', isCurrency: true },
-              { label: 'Valor Pago', value: secStats.pago, icon: CheckCircle2, color: 'text-emerald-600', bg: 'bg-emerald-50/50', isCurrency: true }
-            ].map((card, i) => (
-              <div key={i} className="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm hover:shadow-xl hover:-translate-y-1 transition-all duration-300 group">
-                <div className="flex items-center gap-3 mb-4">
-                  <div className={cn("p-2 rounded-lg", card.bg)}>
-                    <card.icon size={16} className={cn("transition-transform group-hover:scale-110", card.color)} />
-                  </div>
-                  <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">{card.label}</p>
+        {/* Stats Grid */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-md">
+          {[
+            { label: 'Contratos Ativos', value: secStats.count, icon: FolderGit2, color: 'text-[#041627]', bg: 'bg-[#eff4ff] border-[#eff4ff]', isCurrency: false },
+            { label: 'Valor Empenhado', value: secStats.empenhado, icon: Wallet, color: 'text-[#006397]', bg: 'bg-[#eff4ff] border-[#eff4ff]', isCurrency: true },
+            { label: 'Valor Liquidado', value: secStats.liquidado, icon: Activity, color: 'text-amber-700', bg: 'bg-[#fff8eb] border-[#ffe0b2]', isCurrency: true },
+            { label: 'Valor Pago', value: secStats.pago, icon: CheckCircle2, color: 'text-green-700', bg: 'bg-[#eafbf0] border-[#a3e9be]', isCurrency: true }
+          ].map((card, i) => (
+            <div key={i} className="bg-white p-md rounded-lg border border-outline-variant shadow-sm hover:shadow transition-all group">
+              <div className="flex items-center gap-sm mb-4">
+                <div className={cn("p-1.5 rounded-lg border", card.bg)}>
+                  <card.icon size={14} className={cn("transition-transform group-hover:scale-110", card.color)} />
                 </div>
-                <p className={cn("text-2xl font-bold tracking-tight", card.color)}>
-                  {card.isCurrency ? formatCurrency(card.value) : card.value}
-                </p>
+                <p className="text-[10px] font-bold text-on-surface-variant uppercase tracking-widest">{card.label}</p>
               </div>
-            ))}
+              <p className={cn("text-xl font-bold tracking-tight font-mono", card.color)}>
+                {card.isCurrency ? formatCurrency(card.value) : card.value}
+              </p>
+            </div>
+          ))}
+        </div>
+
+        {/* Charts & Contracts */}
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-lg">
+          {/* Status pie chart */}
+          <div className="bg-white p-lg rounded-xl border border-outline-variant shadow-sm h-[400px] flex flex-col">
+            <h3 className="font-headline-sm text-headline-sm text-primary mb-lg">Status da Vigência</h3>
+            <div className="flex-1">
+              <ResponsiveContainer width="100%" height="100%">
+                <RePieChart>
+                  <Pie data={statusData} cx="50%" cy="50%" innerRadius={60} outerRadius={85} paddingAngle={4} dataKey="value">
+                    {statusData.map((entry, index) => <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />)}
+                  </Pie>
+                  <Tooltip />
+                  <Legend iconType="circle" wrapperStyle={{ fontSize: 11 }} />
+                </RePieChart>
+              </ResponsiveContainer>
+            </div>
           </div>
 
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-            <div className="lg:col-span-1 bg-white p-8 rounded-2xl border border-slate-100 shadow-[0_8px_30px_rgb(0,0,0,0.04)] h-[400px] flex flex-col">
-              <h3 className="text-lg font-bold text-slate-800 mb-8">Status da Vigência</h3>
-              <div className="flex-1">
-                <ResponsiveContainer width="100%" height="100%">
-                  <RePieChart>
-                    <Pie data={statusData} cx="50%" cy="50%" innerRadius={70} outerRadius={100} paddingAngle={5} dataKey="value">
-                      {statusData.map((entry, index) => <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />)}
-                    </Pie>
-                    <Tooltip />
-                    <Legend />
-                  </RePieChart>
-                </ResponsiveContainer>
-              </div>
+          {/* List of contracts for this department */}
+          <div className="lg:col-span-2 bg-white p-lg rounded-xl border border-outline-variant shadow-sm h-[400px] flex flex-col">
+            <div className="flex items-center justify-between mb-lg border-b border-outline-variant pb-xs">
+              <h3 className="font-headline-sm text-headline-sm text-primary">Contratos Vinculados</h3>
+              <span className="inline-flex items-center px-md py-xs bg-surface-container-high rounded-full font-label-md text-label-md text-secondary">
+                {secretaryData.length} Contratos
+              </span>
             </div>
-
-            <div className="lg:col-span-2 bg-white p-10 rounded-2xl border border-slate-100 shadow-2xl shadow-slate-200/40 h-[600px] lg:h-[500px] flex flex-col">
-              <div className="flex items-center justify-between mb-8">
-                <h3 className="text-xl font-bold text-slate-900 tracking-tight">Cronograma e Detalhes Financeiros</h3>
-                <span className="text-[10px] font-bold text-slate-400 uppercase bg-slate-50 px-3 py-1 rounded-full border border-slate-100">
-                  {secretaryData.length} Itens
-                </span>
-              </div>
-              <div className="overflow-y-auto flex-1 space-y-6 pr-4 custom-scrollbar">
-                {secretaryData.map((contract, i) => {
-                  const total = getNumericValue(contract[valueKey]);
-                  const liq = getNumericValue(contract[liquidadoKey]);
-                  const perc = total > 0 ? (liq / total) * 100 : 0;
-                  return (
-                    <div key={i} className="p-8 rounded-2xl border border-slate-100 bg-white hover:border-blue-100 hover:shadow-xl transition-all duration-300 group">
-                      <div className="flex flex-wrap justify-between items-start gap-6 mb-6">
-                        <div className="space-y-2 flex-1 min-w-[200px]">
-                          <div className="flex items-center gap-2">
-                            <span className="text-[9px] font-bold text-blue-600 bg-blue-50 px-2 py-0.5 rounded font-mono">ID: {contract[allKeys[0]]}</span>
-                            <span className="text-[9px] font-bold text-slate-400 uppercase tracking-widest">{contract[fornecedorKey] || 'Fornecedor não informado'}</span>
-                          </div>
-                          <h4 className="text-lg font-bold text-slate-900 leading-tight group-hover:text-blue-700 transition-colors">{contract[objetoKey] || 'Objeto não descrito'}</h4>
+            <div className="overflow-y-auto flex-1 space-y-sm pr-2 custom-scrollbar">
+              {secretaryData.map((contract, i) => {
+                const totalVal = getNumericValue(contract[valueKey]);
+                const paymentVal = getNumericValue(contract[pagoKey]);
+                const perc = totalVal > 0 ? (paymentVal / totalVal) * 100 : 0;
+                return (
+                  <div key={i} className="p-md rounded-lg border border-outline-variant bg-white hover:border-[#5cb8fd] hover:shadow-sm transition-all group">
+                    <div className="flex flex-wrap justify-between items-start gap-md mb-md">
+                      <div className="space-y-1 flex-1 min-w-[200px]">
+                        <div className="flex items-center gap-xs">
+                          <span className="font-mono-sm text-mono-sm text-secondary font-bold">Nº {contract[contratoKey]}</span>
+                          <span className="text-[10px] text-on-surface-variant font-medium truncate max-w-[150px]">{contract[fornecedorKey]}</span>
                         </div>
-                        <div className="flex flex-col items-end gap-2">
-                          <span className={cn(
-                            "text-[10px] font-bold px-3 py-1 rounded-xl border transition-colors",
-                            contract[statusKey]?.toLowerCase().includes('atrasado') ? "bg-red-50 border-red-100 text-red-600" : "bg-slate-50 border-slate-100 text-slate-600"
-                          )}>
-                            {contract[statusKey] || 'S/ STATUS'}
-                          </span>
-                          <div className="flex items-center gap-1.5 text-[10px] font-bold text-slate-400">
-                            <Calendar size={12} className="text-slate-300" />
-                            {formatDate(contract[inicioKey])} <span className="text-slate-200">/</span> {formatDate(contract[fimKey])}
-                          </div>
-                        </div>
+                        <h4 className="font-body-md text-body-md font-bold text-primary group-hover:text-secondary transition-colors truncate max-w-[400px]">{contract[objetoKey]}</h4>
                       </div>
-                      
-                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-6 mb-8 py-6 border-y border-slate-50">
-                        <div><p className="text-[9px] font-bold text-slate-400 uppercase tracking-wider mb-1">Contrato</p><p className="text-sm font-bold text-slate-900 font-mono">{formatCurrency(contract[valueKey])}</p></div>
-                        <div><p className="text-[9px] font-bold text-slate-400 uppercase tracking-wider mb-1">Empenhado</p><p className="text-sm font-bold text-blue-600 font-mono">{formatCurrency(contract[empenhadoKey])}</p></div>
-                        <div><p className="text-[9px] font-bold text-slate-400 uppercase tracking-wider mb-1">Liquidado</p><p className="text-sm font-bold text-amber-600 font-mono">{formatCurrency(contract[liquidadoKey])}</p></div>
-                        <div><p className="text-[9px] font-bold text-slate-400 uppercase tracking-wider mb-1">Pago</p><p className="text-sm font-bold text-emerald-600 font-mono">{formatCurrency(contract[pagoKey])}</p></div>
-                      </div>
-
-                      <div className="space-y-3">
-                        <div className="flex justify-between items-center">
-                          <p className="text-[9px] font-bold text-slate-400 uppercase tracking-[0.2em]">Execução Financeira</p>
-                          <p className="text-xs font-bold text-slate-900 font-mono">{perc.toFixed(1)}%</p>
-                        </div>
-                        <div className="w-full h-2 bg-slate-50 rounded-full overflow-hidden p-0.5 border border-slate-100">
-                          <div className={cn("h-full rounded-full transition-all duration-1000", perc > 80 ? "bg-emerald-500" : "bg-blue-600")} style={{ width: `${Math.min(perc, 100)}%` }} />
+                      <div className="flex flex-col items-end gap-1">
+                        <span className={cn(
+                          "px-sm py-0.5 rounded-full text-[10px] font-bold uppercase",
+                          contract[statusKey]?.toLowerCase().includes('atrasado') || contract[statusKey]?.toLowerCase().includes('suspenso') 
+                            ? "bg-red-100 text-red-800" 
+                            : "bg-green-100 text-green-800"
+                        )}>
+                          {contract[statusKey]}
+                        </span>
+                        <div className="flex items-center gap-1 text-[10px] text-on-surface-variant">
+                          <Calendar size={11} /> {formatDate(contract[inicioKey])} - {formatDate(contract[fimKey])}
                         </div>
                       </div>
                     </div>
-                  );
-                })}
-              </div>
+
+                    <div className="flex justify-between items-center text-xs font-mono text-[#041627] pt-sm border-t border-outline-variant/40">
+                      <span>Valor Total: {formatCurrency(totalVal)}</span>
+                      <span>Execução Pago: {perc.toFixed(0)}%</span>
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           </div>
         </div>
       </div>
     );
-  }
+  };
 
-  // --- Visão Geral ---
-  const statusGlobalData = Object.entries(filteredData.reduce((acc: any, row) => {
-    const s = row[statusKey] || 'N/A';
-    acc[s] = (acc[s] || 0) + 1;
-    return acc;
-  }, {})).map(([name, value]) => ({ name, value }));
+  // --- Visão Geral do Dashboard (Relação de Contratos por Secretaria) ---
+  const renderMainDashboard = () => {
+    // Unique list of secretariats in the excel file
+    const dropdownSecretaries = ['All Departments', ...secretariesList];
 
-  return (
-    <div className="flex min-h-screen bg-slate-50 font-sans">
-      {/* Sidebar de Filtros */}
-      <aside className={cn(
-        "fixed inset-y-0 left-0 z-50 w-80 bg-white border-r border-slate-200 transform transition-all duration-300 ease-in-out shadow-2xl lg:shadow-none lg:relative",
-        !isSidebarOpen 
-          ? "-translate-x-full lg:translate-x-0 lg:w-0 lg:border-r-0 overflow-hidden opacity-0 lg:opacity-0" 
-          : "translate-x-0 lg:w-80 lg:opacity-100 lg:border-r"
-      )}>
-        <div className={cn(
-          "h-full flex flex-col space-y-8 overflow-y-auto custom-scrollbar transition-all duration-300",
-          !isSidebarOpen ? "p-0 opacity-0" : "p-6 opacity-100"
-        )}>
-          <div className="flex items-center justify-between">
-            <h2 className="text-xl font-bold text-slate-900 tracking-tight flex items-center gap-2">
-              <Activity size={20} className="text-blue-600" />
-              Filtros
-            </h2>
-            <button onClick={() => setIsSidebarOpen(false)} className="lg:hidden p-2 text-slate-400 hover:text-slate-900">
-              <X size={20} />
-            </button>
-          </div>
+    // Status global data for pie chart
+    const statusGlobalData = Object.entries(filteredData.reduce((acc: any, row) => {
+      const s = row[statusKey] || 'N/A';
+      acc[s] = (acc[s] || 0) + 1;
+      return acc;
+    }, {})).map(([name, value]) => ({ name, value }));
 
-          {/* Pesquisa */}
-          <div className="space-y-3">
-            <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Pesquisar Órgão</p>
-            <div className="relative">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
-              <input 
-                type="text" 
-                placeholder="Ex: Saúde, Educação..." 
-                value={filterQuery} 
-                onChange={(e) => setFilterQuery(e.target.value)}
-                className="w-full pl-10 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-2xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/10 focus:border-blue-500/50 transition-all"
-              />
+    // Grouped secretariats to show in UI
+    const secretariaGroups = Object.entries(bySecretaria);
+
+    return (
+      <div className="space-y-lg animate-in fade-in duration-500 max-w-container-max w-full">
+        {/* Header Section */}
+        <section className="w-full">
+          <div className="mb-lg">
+            <h2 className="font-display-lg text-display-lg text-primary">Relação de Contratos por Secretaria</h2>
+            <div className="flex items-center gap-md mt-sm">
+              <span className="inline-flex items-center gap-xs px-md py-xs bg-surface-container-high rounded-full font-label-md text-label-md text-secondary">
+                <span className="w-2 h-2 rounded-full bg-secondary"></span> 
+                {filteredData.length} Contratos Ativos
+              </span>
+              <span className="font-body-md text-body-md text-on-surface-variant opacity-70 italic">
+                Análise técnica baseada em importação local
+              </span>
             </div>
           </div>
 
-          {/* Filtro por Órgão */}
-          <div className="space-y-4">
-            <div className="flex items-center justify-between">
-              <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Órgãos ({secretariesList.length})</p>
-              <div className="flex gap-2">
-                <button onClick={() => setSelectedSecretariesFilter([])} className="text-[9px] font-bold text-blue-600 hover:underline">Limpar</button>
-              </div>
-            </div>
-            <div className="space-y-1 max-h-[300px] overflow-y-auto pr-2 custom-scrollbar">
-              {secretariesList.filter(s => s.toLowerCase().includes(filterQuery.toLowerCase())).map(name => (
-                <div 
-                  key={name} 
-                  onClick={() => setSelectedSecretariesFilter(prev => prev.includes(name) ? prev.filter(n => n !== name) : [...prev, name])} 
-                  className={cn(
-                    "flex items-center gap-3 p-3 rounded-xl cursor-pointer text-sm font-medium transition-all group",
-                    selectedSecretariesFilter.includes(name) ? "bg-blue-50 text-blue-700 shadow-sm" : "text-slate-600 hover:bg-slate-50"
-                  )}
-                >
-                  <div className={cn(
-                    "w-4 h-4 rounded-lg border flex items-center justify-center transition-all",
-                    selectedSecretariesFilter.includes(name) ? "bg-blue-600 border-blue-600" : "border-slate-300 group-hover:border-blue-400"
-                  )}>
-                    {selectedSecretariesFilter.includes(name) && <Check size={10} className="text-white" />}
-                  </div>
-                  <span className="truncate flex-1">{name}</span>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          {/* Filtro por Status */}
-          <div className="space-y-4">
-            <div className="flex items-center justify-between">
-              <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Situação / Status</p>
-              <button onClick={() => setSelectedStatusFilter([])} className="text-[9px] font-bold text-blue-600 hover:underline">Limpar</button>
-            </div>
-            <div className="space-y-1">
-              {statusList.map(status => (
-                <div 
-                  key={status} 
-                  onClick={() => toggleStatusFilter(status)} 
-                  className={cn(
-                    "flex items-center gap-3 p-3 rounded-xl cursor-pointer text-sm font-medium transition-all group",
-                    selectedStatusFilter.includes(status) ? "bg-blue-50 text-blue-700 shadow-sm" : "text-slate-600 hover:bg-slate-50"
-                  )}
-                >
-                  <div className={cn(
-                    "w-4 h-4 rounded-lg border flex items-center justify-center transition-all",
-                    selectedStatusFilter.includes(status) ? "bg-blue-600 border-blue-600" : "border-slate-300 group-hover:border-blue-400"
-                  )}>
-                    {selectedStatusFilter.includes(status) && <Check size={10} className="text-white" />}
-                  </div>
-                  <span className="truncate flex-1">{status}</span>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          {/* Reset Total */}
-          <button 
-            onClick={() => { 
-              setData([]); 
-              setSelectedSecretariesFilter([]); 
-              setSelectedStatusFilter([]); 
-              setTableSearchQuery('');
-              setCurrentPage(1);
-              setSortColumn(null);
-              setExpandedRowIndex(null);
-            }} 
-            className="w-full mt-auto py-4 rounded-2xl border border-red-100 text-red-500 text-xs font-bold uppercase tracking-widest hover:bg-red-50 transition-all flex items-center justify-center gap-2"
-          >
-            <X size={14} />
-            Limpar Análise
-          </button>
-        </div>
-      </aside>
-
-      {/* Conteúdo Principal */}
-      <main className="flex-1 flex flex-col h-screen overflow-hidden bg-slate-50">
-        {/* Topbar para Ações Rápidas & Filtros */}
-        <div className="bg-white border-b border-slate-200 px-6 py-4 flex items-center justify-between gap-4">
-          <button 
-            onClick={() => setIsSidebarOpen(!isSidebarOpen)} 
-            className="p-2.5 text-slate-600 hover:text-slate-900 hover:bg-slate-50 active:bg-slate-100 rounded-xl transition-all flex items-center gap-2 text-xs font-bold uppercase tracking-wider border border-slate-100 shadow-sm"
-          >
-            {isSidebarOpen ? <ChevronLeft size={16} /> : <SlidersHorizontal size={16} />}
-            <span>{isSidebarOpen ? 'Ocultar Filtros' : 'Filtros'}</span>
-          </button>
-          
-          <div className="flex items-center gap-4">
-            <button 
-              onClick={() => {
-                setData([]);
-                setSelectedSecretariesFilter([]);
-                setSelectedStatusFilter([]);
-                setTableSearchQuery('');
-                setCurrentPage(1);
-                setSortColumn(null);
-                setExpandedRowIndex(null);
-              }} 
-              className="px-4 py-2 text-xs font-bold text-slate-400 hover:text-red-500 transition-colors uppercase tracking-widest border border-slate-100 rounded-xl"
+          {/* Horizontal Search/Filter Panel */}
+          <div id="search-panel" className="bg-surface border border-outline-variant rounded-xl p-md mb-xl shadow-sm">
+            <div 
+              className="flex items-center justify-between cursor-pointer select-none"
+              onClick={() => setIsSearchPanelOpen(!isSearchPanelOpen)}
             >
-              Novo Upload
-            </button>
-          </div>
-        </div>
-
-        {/* Área do Dashboard com Scroll */}
-        <div className="flex-1 overflow-y-auto custom-scrollbar p-6 lg:p-12">
-          <div className="max-w-7xl mx-auto space-y-12">
-            <header className="space-y-1">
-              <h1 className="text-4xl font-bold text-slate-900 tracking-tight">Análise de Contratos</h1>
-              <p className="text-slate-500 font-medium">Painel estratégico de execução orçamentária</p>
-            </header>
-
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-              {/* Gráfico de Execução Global */}
-              <div className="lg:col-span-2 bg-white p-8 rounded-[2rem] border border-slate-100 shadow-sm flex flex-col h-[400px]">
-                <div className="flex items-center gap-3 mb-8">
-                  <div className="p-2.5 bg-blue-50 text-blue-600 rounded-2xl"><Activity size={20} /></div>
-                  <div>
-                    <h3 className="text-lg font-bold text-slate-900 tracking-tight">Fluxo de Execução Financeira</h3>
-                    <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">Comparativo de Estágios da Despesa</p>
-                  </div>
-                </div>
-                <div className="flex-1">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <BarChart data={globalExecutionData} margin={{ top: 20, right: 30, left: 20, bottom: 5 }}>
-                      <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
-                      <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{fontSize: 11, fontWeight: 600, fill: '#64748b'}} />
-                      <YAxis hide />
-                      <Tooltip 
-                        cursor={{fill: '#f8fafc'}} 
-                        contentStyle={{borderRadius: '16px', border: 'none', boxShadow: '0 20px 25px -5px rgb(0 0 0 / 0.1)'}}
-                        formatter={(v) => [formatCurrency(v), 'Valor']} 
-                      />
-                      <Bar dataKey="value" radius={[10, 10, 0, 0]} barSize={60} label={{ position: 'top', formatter: (v:any) => formatCurrency(v), fontSize: 10, fontWeight: 700, fill: '#475569' }} />
-                    </BarChart>
-                  </ResponsiveContainer>
-                </div>
+              <div className="flex items-center gap-xs">
+                <span className="material-symbols-outlined text-secondary">manage_search</span>
+                <h3 className="font-headline-sm text-headline-sm text-primary">Busca Avançada</h3>
               </div>
-
-              {/* Top Fornecedores */}
-              <div className="bg-white p-8 rounded-[2rem] border border-slate-100 shadow-sm flex flex-col h-[400px]">
-                <div className="flex items-center gap-3 mb-8">
-                  <div className="p-2.5 bg-emerald-50 text-emerald-600 rounded-2xl"><FolderGit2 size={20} /></div>
-                  <div>
-                    <h3 className="text-lg font-bold text-slate-900 tracking-tight">Top Fornecedores</h3>
-                    <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">Maiores Volume de Contrato</p>
-                  </div>
-                </div>
-                <div className="flex-1 overflow-y-auto custom-scrollbar space-y-4">
-                  {suppliersData.map((sup, i) => (
-                    <div key={i} className="space-y-2">
-                      <div className="flex justify-between items-center text-xs">
-                        <span className="font-bold text-slate-700 truncate pr-4">{sup.name}</span>
-                        <span className="font-mono text-slate-500">{formatCurrency(sup.value)}</span>
-                      </div>
-                      <div className="w-full h-1.5 bg-slate-50 rounded-full overflow-hidden">
-                        <div className="h-full bg-emerald-500" style={{ width: `${(sup.value / (suppliersData[0]?.value || 1)) * 100}%` }} />
-                      </div>
-                    </div>
-                  ))}
-                </div>
+              <div className="flex items-center gap-xs text-xs font-bold text-on-surface-variant uppercase">
+                <span>{isSearchPanelOpen ? 'Ocultar Filtros' : 'Mostrar Filtros'}</span>
+                <ChevronDown size={16} className={cn("transition-transform duration-300", isSearchPanelOpen ? "rotate-180" : "rotate-0")} />
               </div>
             </div>
-
-
-
-            {/* Tabela Geral de Contratos */}
-            <div className="bg-white p-8 rounded-[2rem] border border-slate-100 shadow-sm flex flex-col space-y-6">
-              <div className="flex flex-wrap items-center justify-between gap-4">
-                <div className="space-y-1">
-                  <h2 className="text-2xl font-bold text-slate-900 tracking-tight">Lista Geral de Contratos</h2>
-                  <p className="text-xs text-slate-500 font-medium">Pesquise, filtre e audite todos os contratos importados</p>
-                </div>
-                
-                <div className="flex flex-wrap items-center gap-3">
-                  {/* Busca interna na tabela */}
-                  <div className="relative">
-                    <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
-                    <input 
-                      type="text" 
-                      placeholder="Buscar contrato, fornecedor..." 
-                      value={tableSearchQuery} 
-                      onChange={handleTableSearchChange}
-                      className="pl-10 pr-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/10 focus:border-blue-500/50 transition-all w-64"
-                    />
-                  </div>
-
-                  {/* Exportador Excel do resultado filtrado */}
-                  <button 
-                    onClick={() => downloadExcel(sortedTableData, "Filtrados")} 
-                    className="flex items-center gap-2 px-4 py-2.5 text-xs font-bold bg-slate-900 text-white rounded-xl hover:bg-slate-800 transition-all shadow-sm shadow-slate-900/10 active:scale-95"
-                  >
-                    <Download size={14} />
-                    Exportar Tabela
-                  </button>
-                </div>
-              </div>
-
-              {/* Controles de Registros por Página */}
-              <div className="flex items-center justify-between text-xs text-slate-500 font-medium px-1">
+            
+            {isSearchPanelOpen && (
+              <form onSubmit={handleResetFilters} className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-7 gap-md items-end mt-md animate-in fade-in slide-in-from-top-2 duration-300">
                 <div>
-                  Mostrando <span className="font-bold text-slate-800">{Math.min(sortedTableData.length, (currentPage - 1) * rowsPerPage + 1)}</span> a{' '}
-                  <span className="font-bold text-slate-800">{Math.min(sortedTableData.length, currentPage * rowsPerPage)}</span> de{' '}
-                  <span className="font-bold text-slate-800">{sortedTableData.length}</span> contratos
+                  <label className="font-label-md text-label-md text-on-surface-variant block mb-xs">Nº do Contrato</label>
+                  <input 
+                    type="text" 
+                    value={formContractNum} 
+                    onChange={(e) => setFormContractNum(e.target.value)}
+                    placeholder="Ex: 2024/001"
+                    className="w-full border-outline-variant rounded-lg font-body-md text-body-md focus:border-secondary focus:ring-secondary transition-all py-1.5 px-3 border" 
+                  />
                 </div>
-                <div className="flex items-center gap-2">
-                  <span>Registros por página:</span>
+
+                <div>
+                  <label className="font-label-md text-label-md text-on-surface-variant block mb-xs">Secretaria</label>
                   <select 
-                    value={rowsPerPage} 
-                    onChange={handleRowsPerPageChange}
-                    className="bg-slate-50 border border-slate-200 rounded-lg px-2 py-1 text-xs font-bold text-slate-700 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                    value={formSecretaria} 
+                    onChange={(e) => setFormSecretaria(e.target.value)}
+                    className="w-full border-outline-variant rounded-lg font-body-md text-body-md focus:border-secondary focus:ring-secondary py-1.5 px-3 border bg-white"
                   >
-                    <option value={10}>10</option>
-                    <option value={25}>25</option>
-                    <option value={50}>50</option>
-                    <option value={100}>100</option>
+                    {dropdownSecretaries.map(sec => (
+                      <option key={sec} value={sec}>{sec}</option>
+                    ))}
                   </select>
                 </div>
-              </div>
 
-              {/* Tabela de Dados */}
-              <div className="overflow-x-auto border border-slate-100 rounded-2xl">
-                <table className="w-full text-left border-collapse">
-                  <thead>
-                    <tr className="bg-slate-50 border-b border-slate-100">
-                      <th 
-                        onClick={() => handleSort(contratoKey)} 
-                        className="py-4 px-6 text-[10px] font-bold text-slate-500 uppercase tracking-widest cursor-pointer select-none group"
-                      >
-                        <div className="flex items-center">
-                          Contrato
-                          {renderSortIcon(contratoKey)}
-                        </div>
-                      </th>
-                      <th 
-                        onClick={() => handleSort(secretariaKey)} 
-                        className="py-4 px-6 text-[10px] font-bold text-slate-500 uppercase tracking-widest cursor-pointer select-none group"
-                      >
-                        <div className="flex items-center">
-                          Secretaria / Órgão
-                          {renderSortIcon(secretariaKey)}
-                        </div>
-                      </th>
-                      <th 
-                        onClick={() => handleSort(fornecedorKey)} 
-                        className="py-4 px-6 text-[10px] font-bold text-slate-500 uppercase tracking-widest cursor-pointer select-none group"
-                      >
-                        <div className="flex items-center">
-                          Fornecedor
-                          {renderSortIcon(fornecedorKey)}
-                        </div>
-                      </th>
-                      <th className="py-4 px-6 text-[10px] font-bold text-slate-500 uppercase tracking-widest select-none">
-                        Objeto
-                      </th>
-                      <th 
-                        onClick={() => handleSort(valueKey)} 
-                        className="py-4 px-6 text-[10px] font-bold text-slate-500 uppercase tracking-widest cursor-pointer select-none group text-right"
-                      >
-                        <div className="flex items-center justify-end">
-                          Valor Total
-                          {renderSortIcon(valueKey)}
-                        </div>
-                      </th>
-                      <th 
-                        onClick={() => handleSort(statusKey || '')} 
-                        className="py-4 px-6 text-[10px] font-bold text-slate-500 uppercase tracking-widest cursor-pointer select-none group text-center"
-                      >
-                        <div className="flex items-center justify-center">
-                          Situação
-                          {renderSortIcon(statusKey || '')}
-                        </div>
-                      </th>
-                      <th className="py-4 px-6 text-[10px] font-bold text-slate-500 uppercase tracking-widest select-none text-center">
-                        Ações
-                      </th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-50">
-                    {paginatedTableData.length === 0 ? (
+                <div>
+                  <label className="font-label-md text-label-md text-on-surface-variant block mb-xs">Fornecedor</label>
+                  <input 
+                    type="text" 
+                    value={formSupplier}
+                    onChange={(e) => setFormSupplier(e.target.value)}
+                    placeholder="Nome do Fornecedor..." 
+                    className="w-full border-outline-variant rounded-lg font-body-md text-body-md focus:border-secondary focus:ring-secondary transition-all py-1.5 px-3 border" 
+                  />
+                </div>
+
+                <div>
+                  <label className="font-label-md text-label-md text-on-surface-variant block mb-xs">Mínimo Valor (R$)</label>
+                  <input 
+                    type="number" 
+                    value={formMinVal}
+                    onChange={(e) => setFormMinVal(e.target.value)}
+                    placeholder="Min" 
+                    className="w-full border-outline-variant rounded-lg font-body-md text-body-md focus:border-secondary focus:ring-secondary transition-all py-1.5 px-3 border" 
+                  />
+                </div>
+
+                <div>
+                  <label className="font-label-md text-label-md text-on-surface-variant block mb-xs">Máximo Valor (R$)</label>
+                  <input 
+                    type="number" 
+                    value={formMaxVal}
+                    onChange={(e) => setFormMaxVal(e.target.value)}
+                    placeholder="Max" 
+                    className="w-full border-outline-variant rounded-lg font-body-md text-body-md focus:border-secondary focus:ring-secondary transition-all py-1.5 px-3 border" 
+                  />
+                </div>
+
+                <div>
+                  <label className="font-label-md text-label-md text-on-surface-variant block mb-xs">Vigência Início</label>
+                  <input 
+                    type="date" 
+                    value={formStartDate}
+                    onChange={(e) => setFormStartDate(e.target.value)}
+                    className="w-full border-outline-variant rounded-lg font-body-md text-body-md focus:border-secondary focus:ring-secondary py-1.5 px-3 border text-xs" 
+                  />
+                </div>
+
+                <div className="flex gap-xs">
+                  <button 
+                    type="button"
+                    onClick={() => alert('Filtros dinâmicos aplicados com sucesso!')}
+                    className="flex-grow bg-primary text-on-primary font-label-md text-label-md py-2 px-3 rounded-lg hover:opacity-90 transition-all flex items-center justify-center gap-xs cursor-pointer"
+                  >
+                    <span className="material-symbols-outlined text-sm">filter_alt</span> Filtrar
+                  </button>
+                  <button 
+                    type="button"
+                    onClick={handleResetFilters}
+                    className="w-10 border border-outline-variant text-on-surface-variant rounded-lg hover:bg-surface-container-low transition-all flex items-center justify-center cursor-pointer" 
+                    title="Limpar Tudo"
+                  >
+                    <span className="material-symbols-outlined">restart_alt</span>
+                  </button>
+                </div>
+              </form>
+            )}
+          </div>
+        </section>
+
+        {/* Grouped Sections list */}
+        <section className="w-full space-y-lg">
+          {secretariaGroups.length === 0 ? (
+            <div className="bg-white rounded-xl border border-outline-variant p-xl text-center text-on-surface-variant font-body-md">
+              Nenhuma secretaria com contratos ativos atende aos filtros definidos.
+            </div>
+          ) : (
+            secretariaGroups.map(([secName, secInfo]: [string, any]) => (
+              <div key={secName} className="bg-surface rounded-xl border border-outline-variant overflow-hidden shadow-sm transition-all duration-300 hover:shadow-md">
+                
+                {/* Secretariat Card Title */}
+                <div className="px-lg py-md bg-surface-container-low border-b border-outline-variant flex items-center justify-between flex-wrap gap-sm">
+                  <div className="flex items-center gap-md">
+                    <div className="p-sm bg-white rounded-lg shadow-sm">
+                      {getSecretariaIcon(secName)}
+                    </div>
+                    <h3 className="font-headline-sm text-headline-sm text-primary">{secName}</h3>
+                  </div>
+                  <div className="text-right">
+                    <p className="font-label-md text-label-md text-on-surface-variant uppercase tracking-widest">Total Alocado</p>
+                    <p className="font-headline-sm text-headline-sm text-secondary font-mono">{formatCurrency(secInfo.totalValue)}</p>
+                  </div>
+                </div>
+
+                {/* Table of contracts inside secretariat */}
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left font-body-md text-body-md">
+                    <thead className="bg-surface text-on-surface-variant border-b border-outline-variant font-label-md text-label-md uppercase tracking-wider">
                       <tr>
-                        <td colSpan={7} className="py-12 text-center text-slate-400 text-sm font-medium">
-                          Nenhum contrato encontrado para os critérios de busca.
-                        </td>
+                        <th className="px-lg py-md">CONTRATO Nº</th>
+                        <th className="px-lg py-md">FORNECEDOR</th>
+                        <th className="px-lg py-md text-center">STATUS</th>
+                        <th className="px-lg py-md text-right">VALOR (R$)</th>
+                        <th className="px-lg py-md">VALIDADE</th>
+                        <th className="px-lg py-md text-right">AÇÕES</th>
                       </tr>
-                    ) : (
-                      paginatedTableData.map((row) => {
-                        const originalIdx = data.indexOf(row);
-                        const isExpanded = expandedRowIndex === originalIdx;
+                    </thead>
+                    <tbody className="divide-y divide-outline-variant">
+                      {secInfo.contracts.slice(0, 5).map((row: ContractData, index: number) => {
                         const contractId = row[contratoKey] || 'S/N';
-                        const secName = row[secretariaKey] || 'Não Informado';
                         const supplierName = row[fornecedorKey] || 'Não Informado';
-                        const objectText = row[objetoKey] || 'Não Descrito';
                         const statusVal = row[statusKey] || 'N/A';
                         const totalVal = getNumericValue(row[valueKey]);
+                        const validityText = `${formatDate(row[inicioKey])} - ${formatDate(row[fimKey])}`;
                         
                         return (
-                          <React.Fragment key={originalIdx}>
-                            <tr className={cn(
-                              "hover:bg-slate-50/50 transition-colors duration-200 text-sm font-medium",
-                              isExpanded && "bg-blue-50/20 hover:bg-blue-50/30"
-                            )}>
-                              <td className="py-4 px-6 text-slate-900 font-mono text-xs">{contractId}</td>
-                              <td className="py-4 px-6 text-slate-700 truncate max-w-[200px]" title={String(secName)}>{String(secName)}</td>
-                              <td className="py-4 px-6 text-slate-700 truncate max-w-[180px]" title={String(supplierName)}>{String(supplierName)}</td>
-                              <td className="py-4 px-6 text-slate-500 truncate max-w-[240px]" title={String(objectText)}>{String(objectText)}</td>
-                              <td className="py-4 px-6 text-slate-900 font-mono text-right text-xs font-bold">{formatCurrency(totalVal)}</td>
-                              <td className="py-4 px-6 text-center">
-                                <span className={cn(
-                                  "inline-block text-[10px] font-bold px-2.5 py-0.5 rounded-full border",
-                                  statusVal.toLowerCase().includes('atrasado') || statusVal.toLowerCase().includes('atraso')
-                                    ? "bg-red-50 border-red-100 text-red-600"
-                                    : statusVal.toLowerCase().includes('ativo') || statusVal.toLowerCase().includes('andamento') || statusVal.toLowerCase().includes('vigente')
-                                    ? "bg-emerald-50 border-emerald-100 text-emerald-600"
-                                    : "bg-slate-50 border-slate-100 text-slate-600"
-                                )}>
-                                  {statusVal}
-                                </span>
-                              </td>
-                              <td className="py-4 px-6 text-center">
-                                <div className="flex items-center justify-center gap-2">
-                                  <button 
-                                    onClick={() => setExpandedRowIndex(isExpanded ? null : originalIdx)}
-                                    className={cn(
-                                      "p-1.5 rounded-lg border text-xs font-bold transition-all flex items-center gap-1",
-                                      isExpanded 
-                                        ? "bg-blue-50 border-blue-200 text-blue-600" 
-                                        : "bg-white border-slate-200 text-slate-500 hover:text-slate-800 hover:bg-slate-50"
-                                    )}
-                                    title="Ver Detalhes do Contrato"
-                                  >
-                                    Auditar
-                                  </button>
-                                  <button 
-                                    onClick={() => setSelectedSecretary(String(secName))}
-                                    className="p-1.5 rounded-lg border border-slate-200 bg-white text-slate-500 hover:text-blue-600 hover:border-blue-200 transition-all"
-                                    title="Abrir Painel do Órgão"
-                                  >
-                                    <Search size={14} />
-                                  </button>
-                                </div>
-                              </td>
-                            </tr>
-                            
-                            {/* Linha expansível com detalhes completos de auditoria do contrato */}
-                            {isExpanded && (
-                              <tr>
-                                <td colSpan={7} className="p-0 border-b border-slate-100 bg-slate-50/30 animate-in slide-in-from-top duration-300">
-                                  <div className="p-8 space-y-6 border-x-4 border-l-blue-600 border-r-transparent">
-                                    <div className="flex flex-wrap justify-between items-start gap-4">
-                                      <div className="space-y-1.5 flex-1 min-w-[300px]">
-                                        <div className="flex items-center gap-2">
-                                          <span className="text-[10px] font-bold text-blue-600 bg-blue-50 px-2.5 py-0.5 rounded-full border border-blue-100 font-mono">
-                                            Contrato ID: {contractId}
-                                          </span>
-                                          <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">
-                                            {supplierName}
-                                          </span>
-                                        </div>
-                                        <h4 className="text-base font-bold text-slate-900 leading-snug">
-                                          {objectText}
-                                        </h4>
-                                      </div>
-                                      
-                                      <div className="flex flex-col items-end gap-1.5">
-                                        <span className={cn(
-                                          "text-[10px] font-bold px-3 py-1 rounded-xl border",
-                                          statusVal.toLowerCase().includes('atrasado') ? "bg-red-50 border-red-100 text-red-600" : "bg-slate-50 border-slate-100 text-slate-600"
-                                        )}>
-                                          {statusVal}
-                                        </span>
-                                        <div className="flex items-center gap-1.5 text-[10px] font-bold text-slate-500">
-                                          <Calendar size={12} className="text-slate-400" />
-                                          Vigência: {formatDate(row[inicioKey])} <span className="text-slate-300">/</span> {formatDate(row[fimKey])}
-                                        </div>
-                                      </div>
-                                    </div>
-                                    
-                                    {/* Métricas e Execução Financeira */}
-                                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-6 p-6 rounded-2xl border border-slate-100 bg-white">
-                                      <div>
-                                        <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest mb-1 flex items-center gap-1">
-                                          <DollarSign size={10} className="text-slate-300" /> Contrato
-                                        </p>
-                                        <p className="text-base font-bold text-slate-900 font-mono">{formatCurrency(row[valueKey])}</p>
-                                      </div>
-                                      <div>
-                                        <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest mb-1 flex items-center gap-1">
-                                          <Wallet size={10} className="text-slate-300" /> Empenhado
-                                        </p>
-                                        <p className="text-base font-bold text-blue-600 font-mono">{formatCurrency(row[empenhadoKey])}</p>
-                                      </div>
-                                      <div>
-                                        <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest mb-1 flex items-center gap-1">
-                                          <Activity size={10} className="text-slate-300" /> Liquidado
-                                        </p>
-                                        <p className="text-base font-bold text-amber-600 font-mono">{formatCurrency(row[liquidadoKey])}</p>
-                                      </div>
-                                      <div>
-                                        <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest mb-1 flex items-center gap-1">
-                                          <CheckCircle2 size={10} className="text-slate-300" /> Pago
-                                        </p>
-                                        <p className="text-base font-bold text-emerald-600 font-mono">{formatCurrency(row[pagoKey])}</p>
-                                      </div>
-                                    </div>
-                                    
-                                    {/* Barra de Execução */}
-                                    {(() => {
-                                      const total = getNumericValue(row[valueKey]);
-                                      const liq = getNumericValue(row[liquidadoKey]);
-                                      const perc = total > 0 ? (liq / total) * 100 : 0;
-                                      return (
-                                        <div className="space-y-2">
-                                          <div className="flex justify-between items-center text-xs">
-                                            <p className="text-[9px] font-bold text-slate-400 uppercase tracking-[0.2em]">Execução Financeira (Liquidado / Total)</p>
-                                            <p className="font-bold text-slate-800 font-mono">{perc.toFixed(1)}%</p>
-                                          </div>
-                                          <div className="w-full h-2.5 bg-slate-100 rounded-full overflow-hidden p-0.5 border border-slate-200">
-                                            <div 
-                                              className={cn("h-full rounded-full transition-all duration-1000", perc > 80 ? "bg-emerald-500" : "bg-blue-600")} 
-                                              style={{ width: `${Math.min(perc, 100)}%` }} 
-                                            />
-                                          </div>
-                                        </div>
-                                      );
-                                    })()}
-                                  </div>
-                                </td>
-                              </tr>
-                            )}
-                          </React.Fragment>
-                        );
-                      })
-                    )}
-                  </tbody>
-                </table>
-              </div>
-
-              {/* Paginação */}
-              {totalPages > 1 && (
-                <div className="flex items-center justify-between pt-4 border-t border-slate-100 text-sm">
-                  <button 
-                    onClick={() => setCurrentPage(prev => Math.max(1, prev - 1))}
-                    disabled={currentPage === 1}
-                    className="flex items-center gap-1 px-4 py-2 border border-slate-200 rounded-xl hover:bg-slate-50 transition-all font-bold text-slate-600 disabled:opacity-40 disabled:cursor-not-allowed text-xs"
-                  >
-                    Anterior
-                  </button>
-                  
-                  <div className="flex items-center gap-1">
-                    {Array.from({ length: totalPages }, (_, i) => i + 1)
-                      .filter(page => {
-                        return page === 1 || 
-                               page === totalPages || 
-                               Math.abs(page - currentPage) <= 1;
-                      })
-                      .map((page, idx, array) => {
-                        const showEllipsis = idx > 0 && page - array[idx - 1] > 1;
-                        return (
-                          <React.Fragment key={page}>
-                            {showEllipsis && <span className="px-2 text-slate-400 font-bold">...</span>}
-                            <button 
-                              onClick={() => setCurrentPage(page)}
-                              className={cn(
-                                "w-9 h-9 flex items-center justify-center rounded-xl font-bold transition-all text-xs",
-                                currentPage === page 
-                                  ? "bg-slate-900 text-white shadow-md shadow-slate-900/10" 
-                                  : "bg-white border border-slate-200 text-slate-600 hover:bg-slate-50"
-                              )}
-                            >
-                              {page}
-                            </button>
-                          </React.Fragment>
+                          <tr key={index} className="hover:bg-surface-container transition-colors group">
+                            <td className="px-lg py-md font-mono-sm text-mono-sm text-secondary font-bold">
+                              {contractId}
+                            </td>
+                            <td className="px-lg py-md">
+                              <div className="font-bold text-primary">{supplierName}</div>
+                              <div className="text-xs text-on-surface-variant">Processo: {row[processoKey] || 'n/a'}</div>
+                            </td>
+                            <td className="px-lg py-md text-center">
+                              <span className={cn(
+                                "px-sm py-1 rounded-full text-xs font-bold uppercase",
+                                statusVal.toLowerCase().includes('atrasado') || statusVal.toLowerCase().includes('suspenso') 
+                                  ? "bg-red-100 text-red-800" 
+                                  : statusVal.toLowerCase().includes('ativo') || statusVal.toLowerCase().includes('vigente') || statusVal.toLowerCase().includes('andamento')
+                                  ? "bg-green-100 text-green-800"
+                                  : "bg-amber-100 text-amber-800"
+                              )}>
+                                {statusVal}
+                              </span>
+                            </td>
+                            <td className="px-lg py-md text-right font-bold text-primary font-mono">
+                              {formatCurrency(totalVal)}
+                            </td>
+                            <td className="px-lg py-md text-on-surface-variant font-mono text-xs">
+                              {validityText}
+                            </td>
+                            <td className="px-lg py-md text-right">
+                              <div className="flex items-center justify-end gap-xs">
+                                <button 
+                                  onClick={() => setSelectedContract(row)}
+                                  className="material-symbols-outlined text-on-surface-variant hover:text-primary transition-colors p-xs rounded hover:bg-surface-variant cursor-pointer"
+                                  title="Auditar Contrato"
+                                >
+                                  visibility
+                                </button>
+                                <button 
+                                  onClick={() => setSelectedSecretary(secName)}
+                                  className="material-symbols-outlined text-on-surface-variant hover:text-secondary transition-colors p-xs rounded hover:bg-surface-variant cursor-pointer"
+                                  title="Análise do Setor"
+                                >
+                                  analytics
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
                         );
                       })}
+                    </tbody>
+                  </table>
+                </div>
+
+                {secInfo.contracts.length > 5 && (
+                  <div className="px-lg py-sm bg-surface-container-lowest text-right">
+                    <button 
+                      onClick={() => setSelectedSecretary(secName)}
+                      className="font-label-md text-label-md text-secondary hover:underline flex items-center gap-xs ml-auto cursor-pointer"
+                    >
+                      Ver Tudo de {secName} ({secInfo.contracts.length}) <span className="material-symbols-outlined text-sm">arrow_forward</span>
+                    </button>
                   </div>
+                )}
+              </div>
+            ))
+          )}
+        </section>
 
-                  <button 
-                    onClick={() => setCurrentPage(prev => Math.min(totalPages, prev + 1))}
-                    disabled={currentPage === totalPages}
-                    className="flex items-center gap-1 px-4 py-2 border border-slate-200 rounded-xl hover:bg-slate-50 transition-all font-bold text-slate-600 disabled:opacity-40 disabled:cursor-not-allowed text-xs"
-                  >
-                    Próxima
-                  </button>
-                </div>
-              )}
+        {/* Bento Grid Stats */}
+        <section className="mt-xl grid grid-cols-1 lg:grid-cols-3 gap-lg">
+          {/* Card 1: ALERTA DE ALTO RISCO */}
+          <div className="col-span-1 bg-primary text-on-primary p-lg rounded-xl flex flex-col justify-between overflow-hidden relative group">
+            <div className="z-10">
+              <h4 className="font-label-md text-label-md opacity-60 uppercase tracking-widest">ALERTAS DE ALTO RISCO</h4>
+              <div className="font-display-lg text-display-lg mt-sm font-mono">
+                {String(highRiskAlerts.length).padStart(2, '0')}
+              </div>
             </div>
-
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-10">
-              <div className="bg-white p-10 rounded-[2rem] border border-slate-100 shadow-2xl shadow-slate-200/40 flex flex-col h-[450px]">
-                <div className="flex items-center gap-3 mb-10">
-                  <div className="p-2.5 bg-blue-50 text-blue-600 rounded-2xl"><BarChart3 size={20} /></div>
-                  <h3 className="text-xl font-bold text-slate-900 tracking-tight">Ranking Financeiro (Empenho)</h3>
+            <div className="mt-lg z-10 space-y-1">
+              <p className="text-xs opacity-70">
+                {highRiskAlerts.length > 0 
+                  ? `${highRiskAlerts.length} contratos exigem auditoria imediata ou contatos com fornecedores devido a prazos vencidos ou atrasos.` 
+                  : 'Nenhum contrato possui inconformidades de vigência ou atraso.'}
+              </p>
+              {highRiskAlerts.slice(0, 2).map((alertItem, idx) => (
+                <div key={idx} className="text-[10px] bg-white/10 px-2 py-0.5 rounded flex justify-between font-mono">
+                  <span className="truncate max-w-[120px]">{alertItem[fornecedorKey]}</span>
+                  <span>{alertItem[contratoKey]}</span>
                 </div>
-                <div className="flex-1">
+              ))}
+            </div>
+            <span className="material-symbols-outlined absolute -right-4 -bottom-4 text-[120px] opacity-10 group-hover:scale-110 transition-transform duration-500">warning</span>
+          </div>
+
+          {/* Card 2: Bento right part (Trends + compliance) */}
+          <div className="col-span-2 bg-white border border-outline-variant p-lg rounded-xl flex flex-col sm:flex-row items-stretch gap-xl">
+            {/* Left side: chart */}
+            <div className="w-full sm:w-1/3 flex flex-col justify-between space-y-md">
+              <h4 className="font-label-md text-label-md text-on-surface-variant uppercase tracking-widest">TENDÊNCIA DE GASTOS</h4>
+              <div className="h-28 w-full bg-surface-container rounded-lg p-1">
+                {secretariaGroups.length > 0 ? (
                   <ResponsiveContainer width="100%" height="100%">
-                    <BarChart data={Object.entries(bySecretaria).map(([name, s]:any) => ({ name: name.substring(0, 12), value: s.empenhado })).sort((a,b)=>b.value-a.value).slice(0, 8)} layout="vertical">
-                      <XAxis type="number" hide />
-                      <YAxis dataKey="name" type="category" width={100} tick={{fontSize: 10, fontWeight: 600, fill: '#64748b'}} axisLine={false} tickLine={false} />
-                      <Tooltip 
-                        cursor={{fill: '#f8fafc', radius: 10}} 
-                        contentStyle={{borderRadius: '16px', border: 'none', boxShadow: '0 20px 25px -5px rgb(0 0 0 / 0.1)'}}
-                        formatter={(v) => [formatCurrency(v), 'Valor Empenhado']} 
-                      />
-                      <Bar dataKey="value" fill="#0f172a" radius={[0, 10, 10, 0]} barSize={24} />
+                    <BarChart data={secretariaGroups.map(([name, s]: any) => ({ name: name.substring(0, 10), value: s.totalValue })).slice(0, 5)}>
+                      <Bar dataKey="value" fill="#5cb8fd" radius={[2, 2, 0, 0]} />
+                      <Tooltip formatter={(v) => formatCurrency(v)} />
                     </BarChart>
                   </ResponsiveContainer>
-                </div>
+                ) : (
+                  <div className="w-full h-full flex items-center justify-center text-[10px] text-on-surface-variant">Sem dados</div>
+                )}
               </div>
-              <div className="bg-white p-10 rounded-[2rem] border border-slate-100 shadow-2xl shadow-slate-200/40 flex flex-col h-[450px]">
-                <div className="flex items-center gap-3 mb-10">
-                  <div className="p-2.5 bg-amber-50 text-amber-600 rounded-2xl"><PieChart size={20} /></div>
-                  <h3 className="text-xl font-bold text-slate-900 tracking-tight">Distribuição por Situação</h3>
+            </div>
+
+            {/* Right side: progress stats */}
+            <div className="w-full sm:w-2/3 border-t sm:border-t-0 sm:border-l border-outline-variant pt-lg sm:pt-0 sm:pl-xl flex flex-col justify-center space-y-md">
+              <h4 className="font-label-md text-label-md text-on-surface-variant uppercase tracking-widest">DESEMPENHO POR SECRETARIA</h4>
+              
+              <div className="space-y-sm">
+                <div className="space-y-1">
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="font-body-md text-body-md">Índice de Compliance</span>
+                    <span className="font-bold text-green-600">{complianceIndex}%</span>
+                  </div>
+                  <div className="w-full h-2 bg-surface-container rounded-full overflow-hidden">
+                    <div className="bg-green-600 h-full transition-all duration-1000" style={{ width: `${complianceIndex}%` }} />
+                  </div>
                 </div>
-                <div className="flex-1">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <RePieChart>
-                      <Pie data={statusGlobalData} cx="50%" cy="50%" innerRadius={90} outerRadius={120} paddingAngle={8} dataKey="value">
-                        {statusGlobalData.map((entry, index) => <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} className="stroke-white stroke-2 focus:outline-none" />)}
-                      </Pie>
-                      <Tooltip contentStyle={{borderRadius: '16px', border: 'none', boxShadow: '0 20px 25px -5px rgb(0 0 0 / 0.1)'}} />
-                      <Legend iconType="circle" wrapperStyle={{paddingTop: '20px'}} />
-                    </RePieChart>
-                  </ResponsiveContainer>
+
+                <div className="space-y-1">
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="font-body-md text-body-md">Eficiência Orçamentária</span>
+                    <span className="font-bold text-secondary">{budgetEfficiency}%</span>
+                  </div>
+                  <div className="w-full h-2 bg-surface-container rounded-full overflow-hidden">
+                    <div className="bg-secondary h-full transition-all duration-1000" style={{ width: `${budgetEfficiency}%` }} />
+                  </div>
                 </div>
               </div>
             </div>
           </div>
+        </section>
+      </div>
+    );
+  };
+
+  // --- Main Layout wrapper ---
+  return (
+    <div className="text-on-background bg-background min-h-screen">
+      {/* SideNavBar (JSON Derived) */}
+      <aside className="fixed left-0 top-0 h-full w-sidebar-width bg-primary dark:bg-tertiary flex flex-col py-lg border-r border-outline-variant z-50">
+        <div className="px-lg mb-xl">
+          <h1 className="font-headline-md text-headline-md text-on-primary dark:text-on-tertiary tracking-tight truncate" title="PMO Osasco">
+            PMO Osasco
+          </h1>
+          <p className="font-label-md text-label-md text-[#8192a7] opacity-75 truncate" title={fileName || 'Portal Institucional'}>
+            {fileName ? fileName : 'Portal Institucional'}
+          </p>
         </div>
+        
+        <nav className="flex-grow space-y-base overflow-y-auto custom-scrollbar">
+          <button 
+            onClick={() => { setSelectedContract(null); setSelectedSecretary(null); }}
+            className={cn(
+              "w-full flex items-center px-lg py-sm font-body-md text-body-md text-[#8192a7] hover:bg-primary-container hover:text-white transition-colors duration-200 cursor-pointer text-left",
+              (selectedContract === null && selectedSecretary === null) && "border-l-4 border-secondary-container bg-primary-container text-white font-bold"
+            )}
+          >
+            <span className="material-symbols-outlined mr-md">dashboard</span> Dashboard
+          </button>
+          
+          <button 
+            onClick={() => {
+              setSelectedContract(null);
+              setSelectedSecretary(null);
+              setTimeout(() => {
+                document.getElementById('search-panel')?.scrollIntoView({ behavior: 'smooth' });
+              }, 100);
+            }}
+            className="w-full flex items-center px-lg py-sm font-body-md text-body-md text-[#8192a7] hover:bg-primary-container hover:text-white transition-colors duration-200 cursor-pointer text-left"
+          >
+            <span className="material-symbols-outlined mr-md">search_check</span> Busca Avançada
+          </button>
+
+          {/* Quick link list to Departments */}
+          <div className="pt-sm">
+            <p className="px-lg text-[9px] font-bold text-[#8192a7]/40 uppercase tracking-widest mb-xs">Secretarias</p>
+            <div className="max-h-[220px] overflow-y-auto space-y-base pr-2 custom-scrollbar">
+              {secretariesList.map(secName => (
+                <button
+                  key={secName}
+                  onClick={() => {
+                    setSelectedSecretary(secName);
+                    setSelectedContract(null);
+                  }}
+                  className={cn(
+                    "w-full flex items-center px-lg py-1.5 font-body-md text-[13px] text-[#8192a7]/80 hover:bg-primary-container hover:text-white transition-colors text-left truncate pl-[44px] cursor-pointer",
+                    selectedSecretary === secName && "text-[#5cb8fd] font-bold"
+                  )}
+                >
+                  {secName}
+                </button>
+              ))}
+            </div>
+          </div>
+        </nav>
+        
+        <div className="px-lg mt-auto space-y-md pt-xl">
+          <button 
+            onClick={() => {
+              setData([]);
+              setFileName('');
+              setSelectedContract(null);
+              setSelectedSecretary(null);
+            }}
+            className="w-full bg-secondary-container text-on-secondary-container font-label-md text-label-md py-sm px-md rounded-lg flex items-center justify-center gap-xs hover:opacity-90 transition-all cursor-pointer font-bold"
+          >
+            <span className="material-symbols-outlined">add</span> Nova Análise
+          </button>
+          
+          <div className="pt-md border-t border-[#8192a7]/20">
+            <a className="flex items-center py-xs font-body-md text-body-md text-[#8192a7]/80 hover:text-white" href="#">
+              <span className="material-symbols-outlined mr-md">settings</span> Settings
+            </a>
+            <a className="flex items-center py-xs font-body-md text-body-md text-[#8192a7]/80 hover:text-white" href="#">
+              <span className="material-symbols-outlined mr-md">help</span> Support
+            </a>
+          </div>
+        </div>
+      </aside>
+      
+      {/* TopNavBar */}
+      <header className="fixed top-0 right-0 left-sidebar-width h-16 bg-surface flex justify-between items-center px-lg border-b border-outline-variant z-40">
+        <div className="flex items-center gap-md">
+          <span className="font-headline-sm text-headline-sm text-primary">Sistema de Gestão de Contratos</span>
+        </div>
+        <div className="flex items-center gap-xl">
+          <div className="hidden md:flex gap-lg">
+            <span className="font-label-md text-label-md text-on-surface-variant hover:text-primary transition-all cursor-pointer">Documentos</span>
+            <span className="font-label-md text-label-md text-secondary font-bold border-b-2 border-secondary pb-base cursor-pointer">Fluxos de Trabalho</span>
+            <span className="font-label-md text-label-md text-on-surface-variant hover:text-primary transition-all cursor-pointer">Relatórios</span>
+          </div>
+          <div className="flex items-center gap-md">
+            <button className="material-symbols-outlined text-primary-fixed-variant hover:text-primary transition-colors">notifications</button>
+            <button className="material-symbols-outlined text-primary-fixed-variant hover:text-primary transition-colors">history</button>
+            <div className="w-8 h-8 rounded-full bg-surface-container-high border border-[#c4c6cd] flex items-center justify-center overflow-hidden">
+              <span className="material-symbols-outlined text-primary text-xl">account_circle</span>
+            </div>
+          </div>
+        </div>
+      </header>
+      
+      {/* Main Content Area */}
+      <main className="ml-sidebar-width mt-16 p-lg flex flex-col gap-lg bg-background min-h-[calc(100vh-64px)]">
+        {selectedContract ? (
+          /* Visão Detalhada de Auditoria Exclusiva do Contrato */
+          renderContractDossier()
+        ) : selectedSecretary ? (
+          /* Visão Detalhada por Secretaria */
+          renderSecretaryDossier()
+        ) : (
+          /* Visão Geral do Dashboard (Relação de Contratos por Secretaria) */
+          renderMainDashboard()
+        )}
       </main>
+
+      {/* Floating Action for Quick actions */}
+      <div className="fixed bottom-lg right-lg group z-50">
+        <div className="absolute bottom-full right-0 mb-md opacity-0 group-hover:opacity-100 translate-y-4 group-hover:translate-y-0 transition-all duration-300 pointer-events-none group-hover:pointer-events-auto flex flex-col gap-sm items-end">
+          <button 
+            onClick={() => alert('Novo fornecedor cadastrado localmente para análises.')}
+            className="bg-white border border-outline-variant px-md py-sm rounded-lg shadow-lg font-label-md text-label-md text-primary hover:bg-surface-container transition-all flex items-center gap-sm cursor-pointer whitespace-nowrap"
+          >
+            Novo Fornecedor <span className="material-symbols-outlined text-sm">person_add</span>
+          </button>
+          <button 
+            onClick={() => downloadExcel(filteredData, "Consolidados")}
+            className="bg-white border border-outline-variant px-md py-sm rounded-lg shadow-lg font-label-md text-label-md text-primary hover:bg-surface-container transition-all flex items-center gap-sm cursor-pointer whitespace-nowrap"
+          >
+            Exportar CSV <span className="material-symbols-outlined text-sm">download</span>
+          </button>
+        </div>
+        <button 
+          onClick={() => {
+            setData([]);
+            setFileName('');
+            setSelectedContract(null);
+            setSelectedSecretary(null);
+          }}
+          title="Nova Análise"
+          className="w-16 h-16 bg-primary text-on-primary rounded-full shadow-2xl flex items-center justify-center hover:scale-110 active:scale-95 transition-all cursor-pointer"
+        >
+          <span className="material-symbols-outlined text-3xl">add</span>
+        </button>
+      </div>
     </div>
   );
 }

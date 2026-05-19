@@ -5,7 +5,7 @@ import './globals.css';
 const inter = Inter({ subsets: ['latin'] });
 
 export const metadata: Metadata = {
-  title: 'Dashboards Contratos',
+  title: 'LexAnalytica - Relação de Contratos por Secretaria',
   description: 'Análise de Componentes e Contratos',
 };
 
@@ -15,13 +15,13 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="pt-BR">
+    <html lang="pt-BR" className="light">
+      <head>
+        <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&amp;family=JetBrains+Mono:wght@400&amp;display=swap" rel="stylesheet" />
+        <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet" />
+      </head>
       <body className={inter.className}>
-        <main className="min-h-screen p-4 md:p-8 lg:p-12">
-          <div className="max-w-7xl mx-auto">
-            {children}
-          </div>
-        </main>
+        {children}
       </body>
     </html>
   );
